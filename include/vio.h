@@ -84,6 +84,8 @@ class VIOManager
 {
 public:
   int grid_size;
+  double plane_map_voxel_size;
+  double feat_map_voxel_size;
   vk::AbstractCamera *cam;
   vk::PinholeCamera *pinhole_cam;
   StatesGroup *state;

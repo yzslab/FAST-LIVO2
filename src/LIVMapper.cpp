@@ -124,6 +124,10 @@ void LIVMapper::initializeComponents()
   if (!vk::camera_loader::loadFromRosNs("laserMapping", vio_manager->cam)) throw std::runtime_error("Camera model not correctly specified.");
 
   vio_manager->grid_size = grid_size;
+  vio_manager->plane_map_voxel_size = voxelmap_manager->config_setting_.max_voxel_size_;
+  vio_manager->feat_map_voxel_size = voxelmap_manager->config_setting_.max_voxel_size_;
+  std::cout << "vio::plane_map_voxel_size=" << vio_manager->plane_map_voxel_size << std::endl;
+  std::cout << "vio::feat_map_voxel_size=" << vio_manager->feat_map_voxel_size << std::endl;
   vio_manager->patch_size = patch_size;
   vio_manager->outlier_threshold = outlier_threshold;
   vio_manager->setImuToLidarExtrinsic(extT, extR);
