@@ -109,6 +109,8 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
   nh.param<bool>("publish/pub_effect_point_en", pub_effect_point_en, false);
   nh.param<bool>("publish/dense_map_en", dense_map_en, false);
 
+  nh.param<std::string>("laserMapping/bag", bag_file_paths, "");
+
   p_pre->blind_sqr = p_pre->blind * p_pre->blind;
 }
 
@@ -160,6 +162,50 @@ void LIVMapper::initializeComponents()
   if (!exposure_estimate_en) p_imu->disable_exposure_est();
 
   slam_mode_ = (img_en && lidar_en) ? LIVO : imu_en ? ONLY_LIO : ONLY_LO;
+
+  std::cout << "bag_file_paths=" << bag_file_paths << std::endl;
+  std::string not_parsed = bag_file_paths;
+  while (not_parsed.length() > 0) {
+    auto index = not_parsed.find(',');
+    auto pattern = not_parsed.substr(0, index);
+
+    if (index == std::string::npos) {
+      index = not_parsed.length() - 1;
+    }
+    not_parsed = not_parsed.substr(index + 1);
+
+    if (pattern.length() == 0) {
+      continue;
+    }
+
+    if (pattern[0] == '~') {
+      pattern = getenv("HOME") + pattern.substr(1);
+
+      glob_t globbuf;
+      int glob_ret = glob(pattern.c_str(), 0, NULL, &globbuf);
+      if (glob_ret < 0) {
+        perror("glob()");
+        exit(1);
+      }
+
+      for (int i = 0; i < globbuf.gl_pathc; ++i) {
+        bag_files.emplace_back(globbuf.gl_pathv[i]);
+      }
+
+      globfree(&globbuf);
+    }
+  }
+
+  if (bag_file_paths.length() > 0) {
+    if (bag_files.size() == 0) {
+      ROS_ERROR("Bag file paths provided, but not a valid one can be found");
+      exit(1);
+    }
+    std::cout << "Bag files:" << std::endl;
+    for (auto &i : bag_files) {
+      std::cout << "  " << i << std::endl;
+    }
+  }
 }
 
 void LIVMapper::initializeFiles() 
@@ -188,13 +234,45 @@ void LIVMapper::initializeFiles()
   fout_out.open(DEBUG_FILE_DIR("mat_out.txt"), std::ios::out);
 }
 
+static void *run_bag_lidar_imu_reader(void *arg) {
+  LIVMapper *mapper_ptr = static_cast<LIVMapper *>(arg);
+  mapper_ptr->bag_lidar_imu_reader();
+
+  return nullptr;
+}
+
+static void *run_bag_image_reader(void *arg) {
+  LIVMapper *mapper_ptr = static_cast<LIVMapper *>(arg);
+  mapper_ptr->bag_image_reader();
+
+  return nullptr;
+}
+
 void LIVMapper::initializeSubscribersAndPublishers(ros::NodeHandle &nh, image_transport::ImageTransport &it) 
 {
-  sub_pcl = p_pre->lidar_type == AVIA ? 
-            nh.subscribe(lid_topic, 200000, &LIVMapper::livox_pcl_cbk, this): 
-            nh.subscribe(lid_topic, 200000, &LIVMapper::standard_pcl_cbk, this);
-  sub_imu = nh.subscribe(imu_topic, 200000, &LIVMapper::imu_cbk, this);
-  sub_img = nh.subscribe(img_topic, 200000, &LIVMapper::img_cbk, this);
+  if (bag_files.size() == 0) {
+    sub_pcl = p_pre->lidar_type == AVIA ? 
+              nh.subscribe(lid_topic, 200000, &LIVMapper::livox_pcl_cbk, this): 
+              nh.subscribe(lid_topic, 200000, &LIVMapper::standard_pcl_cbk, this);
+    sub_imu = nh.subscribe(imu_topic, 200000, &LIVMapper::imu_cbk, this);
+    sub_img = nh.subscribe(img_topic, 200000, &LIVMapper::img_cbk, this);
+  } else {
+    pthread_t lidar_imu_thread_id;
+    if (pthread_create(&lidar_imu_thread_id, NULL, run_bag_lidar_imu_reader, static_cast<void *>(this)) < 0) {
+      perror("LiDAR IMU pthread_create()");
+      return;
+    }
+    pthread_detach(lidar_imu_thread_id);
+
+    if (img_en) {
+      pthread_t timage_hread_id;
+      if (pthread_create(&timage_hread_id, NULL, run_bag_image_reader, static_cast<void *>(this)) < 0) {
+        perror("Image pthread_create()");
+        return;
+      }
+      pthread_detach(timage_hread_id);
+    }
+  }
   
   pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered", 100);
   pubNormal = nh.advertise<visualization_msgs::MarkerArray>("visualization_marker", 100);
@@ -443,7 +521,11 @@ void LIVMapper::handleLIO()
 
   if (!img_en) publish_frame_world(pubLaserCloudFullRes, vio_manager);
   if (pub_effect_point_en) publish_effect_world(pubLaserCloudEffect, voxelmap_manager->ptpl_list_);
-  if (voxelmap_manager->config_setting_.is_pub_plane_map_) voxelmap_manager->pubVoxelMap();
+  if (voxelmap_manager->config_setting_.is_pub_plane_map_)
+  {
+    ROS_WARN("Plane publishing enabled, which slows the mapping");
+    voxelmap_manager->pubVoxelMap();
+  }
   publish_path(pubPath);
   publish_mavros(mavros_pose_publisher);
 
@@ -530,11 +612,46 @@ void LIVMapper::savePCD()
   }
 }
 
+void *wait_key_thread(void *arg) {
+  LIVMapper *mapper = static_cast<LIVMapper *>(arg);
+
+  char ch;
+
+  for (;;) {
+    while ((ch = getchar()) != '\n') {
+      if (ch == EOF) {
+        mapper->is_paused = false;
+        return NULL;
+      }
+      continue;
+    }
+
+    mapper->is_paused = !mapper->is_paused;
+  }
+
+  return NULL;
+}
+
 void LIVMapper::run() 
 {
+  is_paused = false;
+
+  if (bag_files.size() > 0) {
+    pthread_t wait_key_thread_id;
+    if (pthread_create(&wait_key_thread_id, NULL, wait_key_thread, static_cast<void *>(this)) < 0) {
+      perror("pthread_create()");
+    } else {
+      pthread_detach(wait_key_thread_id);
+    }
+  }
+
   ros::Rate rate(5000);
   while (ros::ok()) 
   {
+    while (is_paused) {
+      usleep(10000);
+    }
+
     ros::spinOnce();
     if (!sync_packages(LidarMeasures)) 
     {
@@ -814,6 +931,11 @@ cv::Mat LIVMapper::getImageFromMsg(const sensor_msgs::ImageConstPtr &img_msg)
   return img;
 }
 
+cv::Mat LIVMapper::getImageFromMsg(const sensor_msgs::CompressedImageConstPtr &img_msg)
+{
+    return cv::imdecode(cv::Mat(img_msg->data), cv::IMREAD_COLOR);
+}
+
 void LIVMapper::img_cbk(const sensor_msgs::ImageConstPtr &msg_in)
 {
   if (!img_en) return;
@@ -867,6 +989,98 @@ void LIVMapper::img_cbk(const sensor_msgs::ImageConstPtr &msg_in)
   // cout<<"last_timestamp_img:::"<<last_timestamp_img<<endl;
   mtx_buffer.unlock();
   sig_buffer.notify_all();
+}
+
+void LIVMapper::bag_lidar_imu_reader(void) {
+  std::vector<rosbag::Bag> bags;
+  open_bags(bags);
+
+  rosbag::View view;
+  for (const auto &i : bags) {
+    view.addQuery(i, rosbag::TopicQuery(lid_topic));
+    view.addQuery(i, rosbag::TopicQuery(imu_topic));
+  }
+
+  for (const auto &i : view) {
+    auto lidar_msg_ptr = i.instantiate<livox_ros_driver::CustomMsg>();
+    if (lidar_msg_ptr != nullptr) {
+      if (lid_raw_data_buffer.size() > 512) {
+        usleep(100000);
+      }
+      while (is_paused) {
+        usleep(100000);
+      }
+      livox_pcl_cbk(lidar_msg_ptr);
+      continue;
+    }
+
+    auto imu_msg_ptr = i.instantiate<sensor_msgs::Imu>();
+    if (imu_msg_ptr != nullptr) {
+      imu_cbk(imu_msg_ptr);
+      continue;
+    }
+
+    ROS_ERROR("Unsupported message type: %s", i.getDataType().c_str());
+    return;
+  }
+
+  ROS_INFO("LiDAR and IMU topics iteration completed");
+}
+
+void LIVMapper::bag_image_reader(void)
+{
+  std::vector<rosbag::Bag> bags;
+  open_bags(bags);
+
+  // LiDAR
+  uint64_t first_lidar_msg_actual_time;
+  {
+    rosbag::View lidar_view;
+    for (auto &i : bags)
+    {
+      lidar_view.addQuery(i, rosbag::TopicQuery(lid_topic));
+    }
+
+    rosbag::View::const_iterator lidar_msg_it = lidar_view.begin();
+    if (lidar_msg_it == lidar_view.end())
+    {
+      ROS_ERROR("LiDAR message not found");
+      return;
+    }
+
+    first_lidar_msg_actual_time = (*lidar_msg_it).getTime().toNSec();
+  }
+
+  std::cout << "first_lidar_msg_actual_time=" << first_lidar_msg_actual_time << std::endl;
+
+  rosbag::View view;
+  for (const auto &i : bags)
+  {
+    view.addQuery(i, rosbag::TopicQuery(img_topic));
+    view.addQuery(i, rosbag::TopicQuery(img_topic + "/compressed"));
+  }
+
+  for (const auto &i : view)
+  {
+    sensor_msgs::CompressedImageConstPtr compressed_image_msg_ptr = i.instantiate<sensor_msgs::CompressedImage>();
+    if (compressed_image_msg_ptr != nullptr) {
+      process_image_message(compressed_image_msg_ptr, i, first_lidar_msg_actual_time);
+      continue;
+    }
+
+    sensor_msgs::ImageConstPtr image_msg_ptr = i.instantiate<sensor_msgs::Image>();
+    if (image_msg_ptr != nullptr) {
+      process_image_message(image_msg_ptr, i, first_lidar_msg_actual_time);
+      continue;
+    }
+
+    ROS_ERROR("Unsupported image type: %s", i.getDataType().c_str());
+    return;
+  }
+
+  ROS_INFO("Image topic iteration completed");
+
+  return;
 }
 
 bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
@@ -947,8 +1161,11 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       // printf("[ Data Cut ] last_lio_update_time: %lf \n",
       // meas.last_lio_update_time);
 
+      
       double lid_newest_time = lid_header_time_buffer.back() + lid_raw_data_buffer.back()->points.back().curvature / double(1000);
       double imu_newest_time = imu_buffer.back()->header.stamp.toSec();
+      
+      ROS_INFO("img_capture_time=%f, lid_header_time_buffer.fromt()=%f, last_lio_update_time=%f, lid_newest_time=%f, imu_newest_time=%f", img_capture_time, lid_header_time_buffer.front(), meas.last_lio_update_time, lid_newest_time, imu_newest_time);
 
       if (img_capture_time < meas.last_lio_update_time + 0.00001)
       {
@@ -995,6 +1212,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       meas.pcl_proc_next->reserve(max_size);
       // deque<PointCloudXYZI::Ptr> lidar_buffer_tmp;
 
+      double last_pop_lid_time = 0;
       while (!lid_raw_data_buffer.empty())
       {
         if (lid_header_time_buffer.front() > img_capture_time) break;
@@ -1016,9 +1234,14 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
             meas.pcl_proc_next->points.push_back(pt);
           }
         }
+
+        last_pop_lid_time = lid_header_time_buffer.front();
+
         lid_raw_data_buffer.pop_front();
         lid_header_time_buffer.pop_front();
       }
+
+      ROS_INFO("last_pop_lid_time=%f", last_pop_lid_time);
 
       meas.measures.push_back(m);
       meas.lio_vio_flg = LIO;
@@ -1308,4 +1531,12 @@ void LIVMapper::publish_path(const ros::Publisher pubPath)
   msg_body_pose.header.frame_id = "camera_init";
   path.poses.push_back(msg_body_pose);
   pubPath.publish(path);
+}
+
+void LIVMapper::open_bags(std::vector<rosbag::Bag> &bags) {
+  bags.reserve(bag_files.size());
+  for (const auto &i : bag_files) {
+    // std::cout << "Opening " << i << std::endl;
+    bags.emplace_back(i, rosbag::bagmode::Read);
+  }
 }

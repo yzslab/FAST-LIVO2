@@ -20,6 +20,12 @@ which is included as part of this source code package.
 #include <image_transport/image_transport.h>
 #include <nav_msgs/Path.h>
 #include <vikit/camera_loader.h>
+#include <vector>
+#include <ros/ros.h>
+#include <rosbag/bag.h>
+#include <rosbag/view.h>
+#include <pthread.h>
+#include <glob.h>
 
 class LIVMapper
 {
@@ -49,6 +55,8 @@ public:
   void livox_pcl_cbk(const livox_ros_driver::CustomMsg::ConstPtr &msg_in);
   void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in);
   void img_cbk(const sensor_msgs::ImageConstPtr &msg_in);
+  void bag_lidar_imu_reader(void);
+  void bag_image_reader(void);
   void publish_img_rgb(const image_transport::Publisher &pubImage, VIOManagerPtr vio_manager);
   void publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, VIOManagerPtr vio_manager);
   void publish_visual_sub_map(const ros::Publisher &pubSubVisualMap);
@@ -61,6 +69,65 @@ public:
   template <typename T> void pointBodyToWorld(const Eigen::Matrix<T, 3, 1> &pi, Eigen::Matrix<T, 3, 1> &po);
   template <typename T> Eigen::Matrix<T, 3, 1> pointBodyToWorld(const Eigen::Matrix<T, 3, 1> &pi);
   cv::Mat getImageFromMsg(const sensor_msgs::ImageConstPtr &img_msg);
+  cv::Mat getImageFromMsg(const sensor_msgs::CompressedImageConstPtr &img_msg);
+
+  void open_bags(std::vector<rosbag::Bag> &);
+
+  template <typename T>
+  void process_image_message(T& msg_ptr, const rosbag::MessageInstance& i, uint64_t first_lidar_msg_actual_time) {
+    while (is_paused)
+    {
+      usleep(100000);
+    }
+
+    // Drop image comming before LiDAR
+    if (i.getTime().toNSec() < first_lidar_msg_actual_time)
+    {
+      std::cout << "Drop an image comming before LiDAR: seq=" << msg_ptr->header.seq << ", time=" << msg_ptr->header.stamp << std::endl;
+      return;
+    }
+
+    double msg_header_time = msg_ptr->header.stamp.toSec() + img_time_offset;
+
+    // Drop image with time same as the previous one
+    if (abs(msg_header_time - last_timestamp_img) < 0.001)
+    {
+      return;
+    }
+
+    if (msg_header_time < last_timestamp_img)
+    {
+      ROS_ERROR("image loop back. \n");
+      return;
+    }
+
+    double img_time_correct = msg_header_time; // last_timestamp_lidar + 0.105;
+
+    if (img_time_correct - last_timestamp_img < 0.02)
+    {
+      ROS_WARN("Image need Jumps: %.6f", img_time_correct);
+      return;
+    }
+
+    auto cv_image = getImageFromMsg(msg_ptr);
+
+    for (;;)
+    {
+      if (img_buffer.size() < 32)
+      {
+        {
+          std::lock_guard<std::mutex> lk(mtx_buffer);
+          img_buffer.push_back(cv_image);
+          img_time_buffer.push_back(img_time_correct);
+          last_timestamp_img = img_time_correct;
+          sig_buffer.notify_all();
+        }
+        ROS_INFO("Get image, its header time: %.6f, %ld images in buffer", msg_header_time, img_buffer.size());
+        break;
+      }
+      usleep(50000);
+    }
+  }
 
   std::mutex mtx_buffer, mtx_buffer_imu_prop;
   std::condition_variable sig_buffer;
@@ -183,5 +250,10 @@ public:
   double aver_time_icp = 0;
   double aver_time_map_inre = 0;
   bool colmap_output_en = false;
+
+  std::string bag_file_paths;
+  std::vector<std::string> bag_files;
+
+  std::atomic<bool> is_paused{true};
 };
 #endif
