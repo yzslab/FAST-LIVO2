@@ -123,7 +123,20 @@ void LIVMapper::initializeComponents()
   voxelmap_manager->extT_ << VEC_FROM_ARRAY(extrinT);
   voxelmap_manager->extR_ << MAT_FROM_ARRAY(extrinR);
 
-  if (!vk::camera_loader::loadFromRosNs("laserMapping", vio_manager->cam)) throw std::runtime_error("Camera model not correctly specified.");
+  if (!vk::camera_loader::loadFromRosNs(
+    "laserMapping", 
+    vio_manager->cam,
+    vio_manager->raw_width,
+    vio_manager->raw_height,
+    vio_manager->raw_fx,
+    vio_manager->raw_fy,
+    vio_manager->raw_cx,
+    vio_manager->raw_cy,
+    vio_manager->k1,
+    vio_manager->k2,
+    vio_manager->p1,
+    vio_manager->p2
+  )) throw std::runtime_error("Camera model not correctly specified.");
 
   vio_manager->grid_size = grid_size;
   vio_manager->plane_map_voxel_size = voxelmap_manager->config_setting_.max_voxel_size_;
@@ -379,7 +392,7 @@ void LIVMapper::handleVIO()
     vio_manager->plot_flag = false;
   }
 
-  vio_manager->processFrame(LidarMeasures.measures.back().img, _pv_list, voxelmap_manager->voxel_map_, LidarMeasures.last_lio_update_time - _first_lidar_time);
+  vio_manager->processFrame(LidarMeasures.measures.back().img, _pv_list, voxelmap_manager->voxel_map_, LidarMeasures.last_lio_update_time - _first_lidar_time, LidarMeasures.measures.back().img_raw_nsec_time);
 
   if (imu_prop_enable) 
   {
@@ -401,7 +414,7 @@ void LIVMapper::handleVIO()
   //   visual_sub_map->push_back(temp_map);
   // }
 
-  publish_frame_world(pubLaserCloudFullRes, vio_manager);
+  publish_frame_world(pubLaserCloudFullRes, vio_manager, LidarMeasures.measures.back().img_raw_nsec_time);
   publish_img_rgb(pubImage, vio_manager);
 
   euler_cur = RotMtoEuler(_state.rot_end);
@@ -519,7 +532,7 @@ void LIVMapper::handleLIO()
   }
   *pcl_w_wait_pub = *laserCloudWorld;
 
-  if (!img_en) publish_frame_world(pubLaserCloudFullRes, vio_manager);
+  if (!img_en) publish_frame_world(pubLaserCloudFullRes, vio_manager, 0);
   if (pub_effect_point_en) publish_effect_world(pubLaserCloudEffect, voxelmap_manager->ptpl_list_);
   if (voxelmap_manager->config_setting_.is_pub_plane_map_)
   {
@@ -979,7 +992,10 @@ void LIVMapper::img_cbk(const sensor_msgs::ImageConstPtr &msg_in)
 
   cv::Mat img_cur = getImageFromMsg(msg);
   img_buffer.push_back(img_cur);
-  img_time_buffer.push_back(img_time_correct);
+  img_time_buffer.emplace_back(
+    img_time_correct,
+    msg->header.stamp.toNSec()
+  );
 
   // ROS_INFO("Correct Image time: %.6f", img_time_correct);
 
@@ -1152,7 +1168,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
     case VIO:
     {
       // printf("!!! meas.lio_vio_flg: %d \n", meas.lio_vio_flg);
-      double img_capture_time = img_time_buffer.front() + exposure_time_init;
+      double img_capture_time = img_time_buffer.front().time + exposure_time_init;
       /*** has img topic, but img topic timestamp larger than lidar end time,
        * process lidar topic. After LIO update, the meas.lidar_frame_end_time
        * will be refresh. ***/
@@ -1255,7 +1271,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
 
     case LIO:
     {
-      double img_capture_time = img_time_buffer.front() + exposure_time_init;
+      double img_capture_time = img_time_buffer.front().time + exposure_time_init;
       meas.lio_vio_flg = VIO;
       // printf("[ Data Cut ] VIO \n");
       meas.measures.clear();
@@ -1265,6 +1281,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       m.vio_time = img_capture_time;
       m.lio_time = meas.last_lio_update_time;
       m.img = img_buffer.front();
+      m.img_raw_nsec_time = img_time_buffer.front().raw_nsec_time;
       mtx_buffer.lock();
       // while ((!imu_buffer.empty() && (imu_time < img_capture_time)))
       // {
@@ -1340,7 +1357,7 @@ void LIVMapper::publish_img_rgb(const image_transport::Publisher &pubImage, VIOM
   pubImage.publish(out_msg.toImageMsg());
 }
 
-void LIVMapper::publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, VIOManagerPtr vio_manager)
+void LIVMapper::publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, VIOManagerPtr vio_manager, uint64_t img_raw_nsec_time)
 {
   if (pcl_w_wait_pub->empty()) return;
   PointCloudXYZRGB::Ptr laserCloudWorldRGB(new PointCloudXYZRGB());
@@ -1395,6 +1412,11 @@ void LIVMapper::publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, 
   {
     // cout << "RGB pointcloud size: " << laserCloudWorldRGB->size() << endl;
     pcl::toROSMsg(*laserCloudWorldRGB, laserCloudmsg);
+    if (pcd_save_en && laserCloudWorldRGB->size() > 0) {
+      pcl::PCDWriter pcd_writer;
+      string frame_pcd_path(string(string(ROOT_DIR) + "Log/PCD_frames/") + to_string(img_raw_nsec_time) + string(".pcd"));
+      pcd_writer.writeBinary(frame_pcd_path, *laserCloudWorldRGB);
+    }
   }
   else 
   { 
@@ -1407,47 +1429,47 @@ void LIVMapper::publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, 
   /**************** save map ****************/
   /* 1. make sure you have enough memories
   /* 2. noted that pcd save will influence the real-time performences **/
-  if (pcd_save_en)
-  {
-    int size = feats_undistort->points.size();
-    PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
-    static int scan_wait_num = 0;
+  // if (pcd_save_en)
+  // {
+  //   int size = feats_undistort->points.size();
+  //   PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
+  //   static int scan_wait_num = 0;
 
-    if (img_en)
-    {
-      *pcl_wait_save += *laserCloudWorldRGB;
-    }
-    else
-    {
-      *pcl_wait_save_intensity += *pcl_w_wait_pub;
-    }
-    scan_wait_num++;
+  //   if (img_en)
+  //   {
+  //     *pcl_wait_save += *laserCloudWorldRGB;
+  //   }
+  //   else
+  //   {
+  //     *pcl_wait_save_intensity += *pcl_w_wait_pub;
+  //   }
+  //   scan_wait_num++;
 
-    if ((pcl_wait_save->size() > 0 || pcl_wait_save_intensity->size() > 0) && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
-    {
-      pcd_index++;
-      string all_points_dir(string(string(ROOT_DIR) + "Log/PCD/") + to_string(pcd_index) + string(".pcd"));
-      pcl::PCDWriter pcd_writer;
-      if (pcd_save_en)
-      {
-        cout << "current scan saved to /PCD/" << all_points_dir << endl;
-        if (img_en)
-        {
-          pcd_writer.writeBinary(all_points_dir, *pcl_wait_save); // pcl::io::savePCDFileASCII(all_points_dir, *pcl_wait_save);
-          PointCloudXYZRGB().swap(*pcl_wait_save);
-        }
-        else
-        {
-          pcd_writer.writeBinary(all_points_dir, *pcl_wait_save_intensity);
-          PointCloudXYZI().swap(*pcl_wait_save_intensity);
-        }        
-        Eigen::Quaterniond q(_state.rot_end);
-        fout_pcd_pos << _state.pos_end[0] << " " << _state.pos_end[1] << " " << _state.pos_end[2] << " " << q.w() << " " << q.x() << " " << q.y()
-                     << " " << q.z() << " " << endl;
-        scan_wait_num = 0;
-      }
-    }
-  }
+  //   if ((pcl_wait_save->size() > 0 || pcl_wait_save_intensity->size() > 0) && pcd_save_interval > 0 && scan_wait_num >= pcd_save_interval)
+  //   {
+  //     pcd_index++;
+  //     string all_points_dir(string(string(ROOT_DIR) + "Log/PCD/") + to_string(pcd_index) + string(".pcd"));
+  //     pcl::PCDWriter pcd_writer;
+  //     if (pcd_save_en)
+  //     {
+  //       cout << "current scan saved to /PCD/" << all_points_dir << endl;
+  //       if (img_en)
+  //       {
+  //         pcd_writer.writeBinary(all_points_dir, *pcl_wait_save); // pcl::io::savePCDFileASCII(all_points_dir, *pcl_wait_save);
+  //         PointCloudXYZRGB().swap(*pcl_wait_save);
+  //       }
+  //       else
+  //       {
+  //         pcd_writer.writeBinary(all_points_dir, *pcl_wait_save_intensity);
+  //         PointCloudXYZI().swap(*pcl_wait_save_intensity);
+  //       }        
+  //       Eigen::Quaterniond q(_state.rot_end);
+  //       fout_pcd_pos << _state.pos_end[0] << " " << _state.pos_end[1] << " " << _state.pos_end[2] << " " << q.w() << " " << q.x() << " " << q.y()
+  //                    << " " << q.z() << " " << endl;
+  //       scan_wait_num = 0;
+  //     }
+  //   }
+  // }
   if(laserCloudWorldRGB->size() > 0)  PointCloudXYZI().swap(*pcl_wait_pub); 
   PointCloudXYZI().swap(*pcl_w_wait_pub);
 }

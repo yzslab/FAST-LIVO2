@@ -59,6 +59,14 @@ enum EKF_STATE
   LO = 3
 };
 
+struct ImageTime
+{
+  double time;
+  uint64_t raw_nsec_time;
+
+  ImageTime(double in_time, uint64_t in_raw_nsec_time) : time(in_time), raw_nsec_time(in_raw_nsec_time) {};
+};
+
 struct MeasureGroup
 {
   double vio_time;
@@ -70,6 +78,7 @@ struct MeasureGroup
     vio_time = 0.0;
     lio_time = 0.0;
   };
+  uint64_t img_raw_nsec_time = static_cast<uint64_t>(-1);
 };
 
 struct LidarMeasureGroup

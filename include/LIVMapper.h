@@ -58,7 +58,7 @@ public:
   void bag_lidar_imu_reader(void);
   void bag_image_reader(void);
   void publish_img_rgb(const image_transport::Publisher &pubImage, VIOManagerPtr vio_manager);
-  void publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, VIOManagerPtr vio_manager);
+  void publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, VIOManagerPtr vio_manager, uint64_t);
   void publish_visual_sub_map(const ros::Publisher &pubSubVisualMap);
   void publish_effect_world(const ros::Publisher &pubLaserCloudEffect, const std::vector<PointToPlane> &ptpl_list);
   void publish_odometry(const ros::Publisher &pubOdomAftMapped);
@@ -118,7 +118,10 @@ public:
         {
           std::lock_guard<std::mutex> lk(mtx_buffer);
           img_buffer.push_back(cv_image);
-          img_time_buffer.push_back(img_time_correct);
+          img_time_buffer.emplace_back(
+            img_time_correct,
+            msg_ptr->header.stamp.toNSec()
+          );
           last_timestamp_img = img_time_correct;
           sig_buffer.notify_all();
         }
@@ -189,7 +192,7 @@ public:
   deque<double> lid_header_time_buffer;
   deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
   deque<cv::Mat> img_buffer;
-  deque<double> img_time_buffer;
+  deque<ImageTime> img_time_buffer;
   vector<pointWithVar> _pv_list;
   vector<double> extrinT;
   vector<double> extrinR;

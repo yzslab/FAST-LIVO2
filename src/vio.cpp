@@ -135,10 +135,11 @@ void VIOManager::initializeVIO()
     fout_camera.open(DEBUG_FILE_DIR("Colmap/sparse/0/cameras.txt"), ios::out);
     fout_camera << "# Camera list with one line of data per camera:\n";
     fout_camera << "#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n";
-    fout_camera << "1 PINHOLE " << width << " " << height << " "
+    fout_camera << "1 OPENCV " << raw_width << " " << raw_height << " "
         << std::fixed << std::setprecision(6)  // 控制浮点数精度为10位
-        << fx << " " << fy << " "
-        << cx << " " << cy << std::endl;
+        << raw_fx << " " << raw_fy << " "
+        << raw_cx + 0.5 << " " << raw_cy + 0.5 << " "
+        << k1 << " " << k2 << " " << p1 << " " << p2 << std::endl;
     fout_camera.close();
   }
   grid_num.resize(length);
@@ -1764,17 +1765,17 @@ V3F VIOManager::getInterpolatedPixel(cv::Mat img, V2D pc)
   return pixel;
 }
 
-void VIOManager::dumpDataForColmap()
+void VIOManager::dumpDataForColmap(uint64_t img_raw_nsec_time)
 {
   static int cnt = 1;
-  std::ostringstream ss;
-  ss << std::setw(5) << std::setfill('0') << cnt;
-  std::string cnt_str = ss.str();
-  std::string image_path = std::string(ROOT_DIR) + "Log/Colmap/images/" + cnt_str + ".png";
+  // std::ostringstream ss;
+  // ss << std::setw(5) << std::setfill('0') << cnt;
+  // std::string cnt_str = ss.str();
+  // std::string image_path = std::string(ROOT_DIR) + "Log/Colmap/images/" + cnt_str + ".jpg";
   
-  cv::Mat img_rgb_undistort;
-  pinhole_cam->undistortImage(img_rgb, img_rgb_undistort);
-  cv::imwrite(image_path, img_rgb_undistort);
+  // cv::Mat img_rgb_undistort;
+  // pinhole_cam->undistortImage(img_rgb, img_rgb_undistort);
+  // cv::imwrite(image_path, img_rgb_undistort);
   
   Eigen::Quaterniond q(new_frame_->T_f_w_.rotation_matrix());
   Eigen::Vector3d t = new_frame_->T_f_w_.translation();
@@ -1783,13 +1784,15 @@ void VIOManager::dumpDataForColmap()
             << q.w() << " " << q.x() << " " << q.y() << " " << q.z() << " "
             << t.x() << " " << t.y() << " " << t.z() << " "
             << 1 << " "  // CAMERA_ID (假设相机ID为1)
-            << cnt_str << ".png" << std::endl;
+            << img_raw_nsec_time << ".jpg" << std::endl;
   fout_colmap << "0.0 0.0 -1" << std::endl;
   cnt++;
 }
 
-void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &feat_map, double img_time)
-{
+void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &feat_map, double img_time, uint64_t img_raw_nsec_time)
+{  
+  assert(img_raw_nsec_time != static_cast<uint64_t>(-1));
+
   if (width != img.cols || height != img.rows)
   {
     if (img.empty()) printf("[ VIO ] Empty Image!\n");
@@ -1834,7 +1837,7 @@ void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unor
 
   double t7 = omp_get_wtime();
   
-  if(colmap_output_en)  dumpDataForColmap();
+  if(colmap_output_en)  dumpDataForColmap(img_raw_nsec_time);
 
   frame_count++;
   ave_total = ave_total * (frame_count - 1) / frame_count + (t7 - t1 - (t5 - t4)) / frame_count;
