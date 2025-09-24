@@ -27,6 +27,28 @@ which is included as part of this source code package.
 #include <pthread.h>
 #include <glob.h>
 
+struct ImageFuture
+{
+  // synchronization
+  bool is_done;
+  std::mutex mtx;
+  std::condition_variable cv;
+  // data
+  cv::Mat image;
+  ros::Time msg_pub_time;
+  std_msgs::Header msg_header;
+  sensor_msgs::CompressedImageConstPtr compressed_image_msg_ptr;
+
+  ImageFuture(
+    sensor_msgs::CompressedImageConstPtr in_compressed_image_msg_ptr, 
+    const ros::Time &in_msg_pub_time, 
+    const std_msgs::Header &in_msg_header
+  ) : compressed_image_msg_ptr(in_compressed_image_msg_ptr), msg_pub_time(in_msg_pub_time), msg_header(in_msg_header)
+  {
+    is_done = false;
+  }
+};
+
 class LIVMapper
 {
 public:
@@ -74,20 +96,20 @@ public:
   void open_bags(std::vector<rosbag::Bag> &);
 
   template <typename T>
-  void process_image_message(T& msg_ptr, const rosbag::MessageInstance& i, uint64_t first_lidar_msg_actual_time) {
+  void process_image_message(T& msg_header, const ros::Time msg_pub_time, uint64_t first_lidar_msg_actual_time, cv::Mat cv_image) {
     while (is_paused)
     {
       usleep(100000);
     }
 
     // Drop image comming before LiDAR
-    if (i.getTime().toNSec() < first_lidar_msg_actual_time)
+    if (msg_pub_time.toNSec() < first_lidar_msg_actual_time)
     {
-      std::cout << "Drop an image comming before LiDAR: seq=" << msg_ptr->header.seq << ", time=" << msg_ptr->header.stamp << std::endl;
+      std::cout << "Drop an image comming before LiDAR: seq=" << msg_header.seq << ", time=" << msg_header.stamp << std::endl;
       return;
     }
 
-    double msg_header_time = msg_ptr->header.stamp.toSec() + img_time_offset;
+    double msg_header_time = msg_header.stamp.toSec() + img_time_offset;
 
     // Drop image with time same as the previous one
     if (abs(msg_header_time - last_timestamp_img) < 0.001)
@@ -109,7 +131,7 @@ public:
       return;
     }
 
-    auto cv_image = getImageFromMsg(msg_ptr);
+    // auto cv_image = getImageFromMsg(msg_ptr);
 
     for (;;)
     {
@@ -120,7 +142,7 @@ public:
           img_buffer.push_back(cv_image);
           img_time_buffer.emplace_back(
             img_time_correct,
-            msg_ptr->header.stamp.toNSec()
+            msg_header.stamp.toNSec()
           );
           last_timestamp_img = img_time_correct;
           sig_buffer.notify_all();
@@ -258,5 +280,21 @@ public:
   std::vector<std::string> bag_files;
 
   std::atomic<bool> is_paused{true};
+
+  std::atomic<bool> has_image_extraction_finished{false};
+  std::atomic<uint32_t> n_extracted_images{0};
+  uint32_t n_consumed_images{0};
+
+  void image_decompressor_thread(void);
+  void image_extractor(void *);
+
+  std::queue<std::shared_ptr<ImageFuture>> future_queue;
+  std::mutex future_queue_mtx;
+  std::condition_variable future_queue_cv;  
+
+  std::queue<std::shared_ptr<ImageFuture>> processed_image_queue;
+  std::mutex processed_image_queue_mtx;
+  std::condition_variable processed_image_queue_push_cv; // notify on pushing
+  std::condition_variable processed_image_queue_pop_cv; // notify on poping
 };
 #endif
