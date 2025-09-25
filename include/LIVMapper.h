@@ -276,6 +276,9 @@ public:
   double aver_time_map_inre = 0;
   bool colmap_output_en = false;
 
+  std::string pcd_output_dir;
+  std::string colmap_output_dir;
+
   std::string bag_file_paths;
   std::vector<std::string> bag_files;
 

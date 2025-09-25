@@ -223,7 +223,7 @@ void LIVMapper::initializeComponents()
 
 void LIVMapper::initializeFiles() 
 {
-  if (pcd_save_en && colmap_output_en)
+  if (pcd_save_en || colmap_output_en)
   {
       const std::string folderPath = std::string(ROOT_DIR) + "/scripts/colmap_output.sh";
       
@@ -241,8 +241,17 @@ void LIVMapper::initializeFiles()
           return;
       }
   }
-  if(colmap_output_en) fout_points.open(std::string(ROOT_DIR) + "Log/Colmap/sparse/0/points3D.txt", std::ios::out);
-  if(pcd_save_interval > 0) fout_pcd_pos.open(std::string(ROOT_DIR) + "Log/PCD/scans_pos.json", std::ios::out);
+
+  if(colmap_output_en)
+  {
+    colmap_output_dir = std::string(ROOT_DIR) + "Log/Colmap/sparse/0/";
+    fout_points.open(colmap_output_dir + "points3D.txt", std::ios::out);
+  }
+  if (pcd_save_en)
+  {
+    pcd_output_dir = string(ROOT_DIR) + "Log/PCD_frames/";
+    fout_pcd_pos.open(pcd_output_dir + "scans_pos.txt", std::ios::out);
+  }
   fout_pre.open(DEBUG_FILE_DIR("mat_pre.txt"), std::ios::out);
   fout_out.open(DEBUG_FILE_DIR("mat_out.txt"), std::ios::out);
 }
@@ -1544,6 +1553,10 @@ void LIVMapper::publish_img_rgb(const image_transport::Publisher &pubImage, VIOM
 
 void LIVMapper::publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, VIOManagerPtr vio_manager, uint64_t img_raw_nsec_time)
 {
+  static pcl::PCDWriter pcd_writer;
+
+  bool saved = false;
+
   if (pcl_w_wait_pub->empty()) return;
   PointCloudXYZRGB::Ptr laserCloudWorldRGB(new PointCloudXYZRGB());
   if (img_en)
@@ -1598,18 +1611,43 @@ void LIVMapper::publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, 
     // cout << "RGB pointcloud size: " << laserCloudWorldRGB->size() << endl;
     pcl::toROSMsg(*laserCloudWorldRGB, laserCloudmsg);
     if (pcd_save_en && laserCloudWorldRGB->size() > 0) {
-      pcl::PCDWriter pcd_writer;
-      string frame_pcd_path(string(string(ROOT_DIR) + "Log/PCD_frames/") + to_string(img_raw_nsec_time) + string(".pcd"));
+      string frame_pcd_path(pcd_output_dir + to_string(img_raw_nsec_time) + string(".pcd"));
       pcd_writer.writeBinary(frame_pcd_path, *laserCloudWorldRGB);
+      saved = true;
     }
   }
   else 
   { 
     pcl::toROSMsg(*pcl_w_wait_pub, laserCloudmsg); 
+
+    if (pcd_save_en) {
+      // build filename
+      static uint32_t frame_idx = 0;
+      std::string frame_idx_str = to_string(frame_idx++);
+      auto n_leading_zeros = 6 - frame_idx_str.length();
+      if (n_leading_zeros > 0)
+      {
+        frame_idx_str.insert(0, n_leading_zeros, '0');
+      }
+      string frame_pcd_path(pcd_output_dir + frame_idx_str + string(".pcd"));
+
+      // save
+      pcd_writer.writeBinary(frame_pcd_path, *pcl_w_wait_pub);
+      saved = true;
+    }
   }
   laserCloudmsg.header.stamp = ros::Time::now(); //.fromSec(last_timestamp_lidar);
   laserCloudmsg.header.frame_id = "camera_init";
   pubLaserCloudFullRes.publish(laserCloudmsg);
+
+  if (saved)
+  {
+    // save pose
+    Eigen::Quaterniond q(_state.rot_end);
+    fout_pcd_pos << _state.pos_end[0] << " " << _state.pos_end[1] << " " << _state.pos_end[2] << " " << q.w() << " " << q.x() << " " << q.y()
+                  << " " << q.z() << " " << endl;
+  }
+
 
   /**************** save map ****************/
   /* 1. make sure you have enough memories

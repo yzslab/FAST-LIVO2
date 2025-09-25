@@ -1,8 +1,11 @@
 #!/bin/bash
 
+BASE_DIR=$(/opt/ros/noetic/bin/rospack find fast_livo)
+
 TARGET_DIRS=(
-    "$(rospack find fast_livo)/Log/Colmap/images"
-    "$(rospack find fast_livo)/Log/Colmap/sparse/0"
+    "${BASE_DIR}/Log/PCD_frames"
+    "${BASE_DIR}/Log/Colmap/images"
+    "${BASE_DIR}/Log/Colmap/sparse/0"
 )
 
 for dir in "${TARGET_DIRS[@]}"; do
