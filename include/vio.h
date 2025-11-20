@@ -83,6 +83,7 @@ public:
 class VIOManager
 {
 public:
+  int camera_id;
   int grid_size;
   double plane_map_voxel_size;
   double feat_map_voxel_size;
@@ -122,19 +123,21 @@ public:
   // double ave_ekf_time = 0;
 
   int frame_count = 0;
-  bool plot_flag;
+  bool plot_flag = false;
 
   Matrix<double, DIM_STATE, DIM_STATE> G, H_T_H;
   MatrixXd K, H_sub_inv;
 
-  ofstream fout_camera, fout_colmap;
-  unordered_map<VOXEL_LOCATION, VOXEL_POINTS *> feat_map;
+  ofstream &fout_camera, &fout_colmap;
+  unordered_map<VOXEL_LOCATION, VOXEL_POINTS *> &feat_map;
   unordered_map<VOXEL_LOCATION, int> sub_feat_map; 
   unordered_map<int, Warp *> warp_map;
   vector<VisualPoint *> retrieve_voxel_points;
   vector<pointWithVar> append_voxel_points;
   FramePtr new_frame_;
   cv::Mat img_cp, img_rgb, img_test;
+
+  bool colorize_only = false;
 
   enum CellType
   {
@@ -143,7 +146,12 @@ public:
     TYPE_UNKNOWN
   };
 
-  VIOManager();
+  VIOManager(
+    int camera_id_in, 
+    ofstream &fout_colmap_in,
+    ofstream &fout_camera_in,
+    unordered_map<VOXEL_LOCATION, VOXEL_POINTS *> &feat_map_in
+  );
   ~VIOManager();
   void updateStateInverse(cv::Mat img, int level);
   void updateState(cv::Mat img, int level);

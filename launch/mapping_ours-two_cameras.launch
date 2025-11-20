@@ -1,0 +1,25 @@
+<launch>
+<!-- Launch file for Livox AVIA LiDAR -->
+
+	<arg name="rviz" default="true" />
+
+	<arg name="bag" default="" />
+	<param name="bag" value="$(arg bag)" />
+
+	<rosparam command="load" file="$(find fast_livo)/config/ours-mid360-two_cameras.yaml" />
+
+	<node pkg="fast_livo" type="fastlivo_mapping" name="laserMapping" output="screen" clear_params="true">
+		<rosparam ns="left" file="$(find fast_livo)/config/camera_ours-12MP-1119.yaml" />
+		<rosparam ns="right" file="$(find fast_livo)/config/camera_ours-5MP-1119.yaml" />
+	</node>
+	
+	<group if="$(arg rviz)">
+		<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find fast_livo)/rviz_cfg/fast_livo2-two_cameras.rviz" />
+	</group>
+	
+	<node pkg="image_transport" type="republish" name="republish_left" args="compressed in:=/left_camera/image raw out:=/left_camera/image" output="screen" respawn="true"/>
+	<node pkg="image_transport" type="republish" name="republish_right" args="compressed in:=/right_camera/image raw out:=/right_camera/image" output="screen" respawn="true"/>
+
+launch-prefix="gdb -ex run --args"
+launch-prefix="valgrind --leak-check=full"
+</launch> 	

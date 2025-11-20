@@ -12,7 +12,12 @@ which is included as part of this source code package.
 
 #include "vio.h"
 
-VIOManager::VIOManager()
+VIOManager::VIOManager(
+  int camera_id_in, 
+  ofstream &fout_colmap_in,
+  ofstream &fout_camera_in,
+  unordered_map<VOXEL_LOCATION, VOXEL_POINTS *> &feat_map_in
+) : camera_id(camera_id_in), fout_colmap(fout_colmap_in), fout_camera(fout_camera_in), feat_map(feat_map_in)
 {
   // downSizeFilter.setLeafSize(0.2, 0.2, 0.2);
 }
@@ -22,8 +27,8 @@ VIOManager::~VIOManager()
   delete visual_submap;
   for (auto& pair : warp_map) delete pair.second;
   warp_map.clear();
-  for (auto& pair : feat_map) delete pair.second;
-  feat_map.clear();
+  // for (auto& pair : feat_map) delete pair.second;
+  // feat_map.clear();
 }
 
 void VIOManager::setImuToLidarExtrinsic(const V3D &transl, const M3D &rot)
@@ -128,19 +133,11 @@ void VIOManager::initializeVIO()
   if(colmap_output_en)
   {
     pinhole_cam = dynamic_cast<vk::PinholeCamera*>(cam);
-    fout_colmap.open(DEBUG_FILE_DIR("Colmap/sparse/0/images.txt"), ios::out);
-    fout_colmap << "# Image list with two lines of data per image:\n";
-    fout_colmap << "#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n";
-    fout_colmap << "#   POINTS2D[] as (X, Y, POINT3D_ID)\n";
-    fout_camera.open(DEBUG_FILE_DIR("Colmap/sparse/0/cameras.txt"), ios::out);
-    fout_camera << "# Camera list with one line of data per camera:\n";
-    fout_camera << "#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n";
-    fout_camera << "1 OPENCV " << raw_width << " " << raw_height << " "
+    fout_camera << camera_id + 1 << " OPENCV " << raw_width << " " << raw_height << " "
         << std::fixed << std::setprecision(6)  // 控制浮点数精度为10位
         << raw_fx << " " << raw_fy << " "
         << raw_cx + 0.5 << " " << raw_cy + 0.5 << " "
         << k1 << " " << k2 << " " << p1 << " " << p2 << std::endl;
-    fout_camera.close();
   }
   grid_num.resize(length);
   map_index.resize(length);
@@ -1783,8 +1780,8 @@ void VIOManager::dumpDataForColmap(uint64_t img_raw_nsec_time)
             << std::fixed << std::setprecision(6)  // 保证浮点数精度为6位
             << q.w() << " " << q.x() << " " << q.y() << " " << q.z() << " "
             << t.x() << " " << t.y() << " " << t.z() << " "
-            << 1 << " "  // CAMERA_ID (假设相机ID为1)
-            << img_raw_nsec_time << ".jpg" << std::endl;
+            << camera_id + 1 << " "  // CAMERA_ID (假设相机ID为1)
+            << camera_id + 1 << "/" << img_raw_nsec_time << ".jpg" << std::endl;
   fout_colmap << "0.0 0.0 -1" << std::endl;
   cnt++;
 }
@@ -1809,33 +1806,39 @@ void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unor
   
   resetGrid();
 
-  double t1 = omp_get_wtime();
+  // double t1 = omp_get_wtime();
 
-  retrieveFromVisualSparseMap(img, pg, feat_map);
+  double t1, t2, t3, t4, t5, t6, t7;
+  t1 = t2 = t3 = t4 = t5 = t6 = t7 = omp_get_wtime();
 
-  double t2 = omp_get_wtime();
+  if (colorize_only == false)
+  {
+    retrieveFromVisualSparseMap(img, pg, feat_map);
 
-  computeJacobianAndUpdateEKF(img);
+    t2 = omp_get_wtime();
 
-  double t3 = omp_get_wtime();
+    computeJacobianAndUpdateEKF(img);
 
-  generateVisualMapPoints(img, pg);
+    t3 = omp_get_wtime();
 
-  double t4 = omp_get_wtime();
-  
-  plotTrackedPoints();
+    generateVisualMapPoints(img, pg);
 
-  if (plot_flag) projectPatchFromRefToCur(feat_map);
+    t4 = omp_get_wtime();
+    
+    plotTrackedPoints();
 
-  double t5 = omp_get_wtime();
+    if (plot_flag) projectPatchFromRefToCur(feat_map);
 
-  updateVisualMapPoints(img);
+    t5 = omp_get_wtime();
 
-  double t6 = omp_get_wtime();
+    updateVisualMapPoints(img);
 
-  updateReferencePatch(feat_map);
+    t6 = omp_get_wtime();
 
-  double t7 = omp_get_wtime();
+    updateReferencePatch(feat_map);
+
+    t7 = omp_get_wtime();
+  }
   
   if(colmap_output_en)  dumpDataForColmap(img_raw_nsec_time);
 

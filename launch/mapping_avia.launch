@@ -4,12 +4,12 @@
 	<arg name="rviz" default="true" />
 
 	<arg name="bag" default="" />
+	<param name="bag" value="$(arg bag)" />
 
 	<rosparam command="load" file="$(find fast_livo)/config/avia.yaml" />
 
-	<node pkg="fast_livo" type="fastlivo_mapping" name="laserMapping" output="screen">
-		<rosparam file="$(find fast_livo)/config/camera_pinhole.yaml" />
-		<param name="bag" value="$(arg bag)" />
+	<node pkg="fast_livo" type="fastlivo_mapping" name="laserMapping" output="screen" clear_params="true">
+		<rosparam ns="left" file="$(find fast_livo)/config/camera_pinhole.yaml" />
 	</node>
 	
 	<group if="$(arg rviz)">

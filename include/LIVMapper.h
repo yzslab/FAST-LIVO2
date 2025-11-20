@@ -14,12 +14,12 @@ which is included as part of this source code package.
 #define LIV_MAPPER_H
 
 #include "IMU_Processing.h"
+#include "camera_state.h"
 #include "vio.h"
 #include "preprocess.h"
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.h>
 #include <nav_msgs/Path.h>
-#include <vikit/camera_loader.h>
 #include <vector>
 #include <ros/ros.h>
 #include <rosbag/bag.h>
@@ -78,9 +78,9 @@ public:
   void imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in);
   void img_cbk(const sensor_msgs::ImageConstPtr &msg_in);
   void bag_lidar_imu_reader(void);
-  void bag_image_reader(void);
-  void publish_img_rgb(const image_transport::Publisher &pubImage, VIOManagerPtr vio_manager);
-  void publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, VIOManagerPtr vio_manager, uint64_t);
+  // void bag_image_reader(void);
+  void publish_img_rgb();
+  void publish_frame_world(const ros::Publisher &pubLaserCloudFullRes, uint64_t);
   void publish_visual_sub_map(const ros::Publisher &pubSubVisualMap);
   void publish_effect_world(const ros::Publisher &pubLaserCloudEffect, const std::vector<PointToPlane> &ptpl_list);
   void publish_odometry(const ros::Publisher &pubOdomAftMapped);
@@ -95,64 +95,6 @@ public:
 
   void open_bags(std::vector<rosbag::Bag> &);
 
-  template <typename T>
-  void process_image_message(T& msg_header, const ros::Time msg_pub_time, uint64_t first_lidar_msg_actual_time, cv::Mat cv_image) {
-    while (is_paused)
-    {
-      usleep(100000);
-    }
-
-    // Drop image comming before LiDAR
-    if (msg_pub_time.toNSec() < first_lidar_msg_actual_time)
-    {
-      std::cout << "Drop an image comming before LiDAR: seq=" << msg_header.seq << ", time=" << msg_header.stamp << std::endl;
-      return;
-    }
-
-    double msg_header_time = msg_header.stamp.toSec() + img_time_offset;
-
-    // Drop image with time same as the previous one
-    if (abs(msg_header_time - last_timestamp_img) < 0.001)
-    {
-      return;
-    }
-
-    if (msg_header_time < last_timestamp_img)
-    {
-      ROS_ERROR("image loop back. \n");
-      return;
-    }
-
-    double img_time_correct = msg_header_time; // last_timestamp_lidar + 0.105;
-
-    if (img_time_correct - last_timestamp_img < 0.02)
-    {
-      ROS_WARN("Image need Jumps: %.6f", img_time_correct);
-      return;
-    }
-
-    // auto cv_image = getImageFromMsg(msg_ptr);
-
-    for (;;)
-    {
-      if (img_buffer.size() < 32)
-      {
-        {
-          std::lock_guard<std::mutex> lk(mtx_buffer);
-          img_buffer.push_back(cv_image);
-          img_time_buffer.emplace_back(
-            img_time_correct,
-            msg_header.stamp.toNSec()
-          );
-          last_timestamp_img = img_time_correct;
-          sig_buffer.notify_all();
-        }
-        ROS_INFO("Get image, its header time: %.6f, %ld images in buffer", msg_header_time, img_buffer.size());
-        break;
-      }
-      usleep(50000);
-    }
-  }
 
   std::mutex mtx_buffer, mtx_buffer_imu_prop;
   std::condition_variable sig_buffer;
@@ -161,7 +103,8 @@ public:
   std::unordered_map<VOXEL_LOCATION, VoxelOctoTree *> voxel_map;
   
   string root_dir;
-  string lid_topic, imu_topic, seq_name, img_topic;
+  // string lid_topic, imu_topic, seq_name, img_topic;
+  string lid_topic, imu_topic, seq_name;
   V3D extT;
   M3D extR;
 
@@ -170,7 +113,8 @@ public:
   double res_mean_last = 0.05;
   double gyr_cov = 0, acc_cov = 0, inv_expo_cov = 0;
   double blind_rgb_points = 0.0;
-  double last_timestamp_lidar = -1.0, last_timestamp_imu = -1.0, last_timestamp_img = -1.0;
+  double last_timestamp_lidar = -1.0, last_timestamp_imu = -1.0;
+  // , last_timestamp_img = -1.0;
   double filter_size_surf_min = 0;
   double filter_size_pcd = 0;
   double _first_lidar_time = 0.0;
@@ -200,6 +144,7 @@ public:
   int img_en = 1, imu_int_frame = 3;
   bool normal_en = true;
   bool exposure_estimate_en = false;
+  // TODO: Move to CameraState
   double exposure_time_init = 0.0;
   bool inverse_composition_en = false;
   bool raycast_en = false;
@@ -213,13 +158,13 @@ public:
   deque<PointCloudXYZI::Ptr> lid_raw_data_buffer;
   deque<double> lid_header_time_buffer;
   deque<sensor_msgs::Imu::ConstPtr> imu_buffer;
-  deque<cv::Mat> img_buffer;
-  deque<ImageTime> img_time_buffer;
+  // deque<cv::Mat> img_buffer;
+  // deque<ImageTime> img_time_buffer;
   vector<pointWithVar> _pv_list;
   vector<double> extrinT;
   vector<double> extrinR;
-  vector<double> cameraextrinT;
-  vector<double> cameraextrinR;
+  // vector<double> cameraextrinT;
+  // vector<double> cameraextrinR;
   double IMG_POINT_COV;
 
   PointCloudXYZI::Ptr visual_sub_map;
@@ -249,13 +194,15 @@ public:
   PreprocessPtr p_pre;
   ImuProcessPtr p_imu;
   VoxelMapManagerPtr voxelmap_manager;
-  VIOManagerPtr vio_manager;
+  // VIOManagerPtr vio_manager;
+  unordered_map<VOXEL_LOCATION, VOXEL_POINTS *> vio_feat_map;
+  std::vector<VIOManagerPtr> vio_managers;
 
   ros::Publisher plane_pub;
   ros::Publisher voxel_pub;
   ros::Subscriber sub_pcl;
   ros::Subscriber sub_imu;
-  ros::Subscriber sub_img;
+  std::vector<ros::Subscriber> sub_imgs;
   ros::Publisher pubLaserCloudFullRes;
   ros::Publisher pubNormal;
   ros::Publisher pubSubVisualMap;
@@ -266,7 +213,8 @@ public:
   ros::Publisher pubLaserCloudDyn;
   ros::Publisher pubLaserCloudDynRmed;
   ros::Publisher pubLaserCloudDynDbg;
-  image_transport::Publisher pubImage;
+  // image_transport::Publisher pubImage;
+  std::vector<image_transport::Publisher> pubImages;
   ros::Publisher mavros_pose_publisher;
   ros::Timer imu_prop_timer;
 
@@ -284,20 +232,29 @@ public:
 
   std::atomic<bool> is_paused{true};
 
-  std::atomic<bool> has_image_extraction_finished{false};
-  std::atomic<uint32_t> n_extracted_images{0};
-  uint32_t n_consumed_images{0};
+  std::map<std::string, std::string> camera_ns_set;
+  void find_valid_cameras(ros::NodeHandle &nh);
 
-  void image_decompressor_thread(void);
-  void image_extractor(void *);
+  std::vector<std::shared_ptr<CameraState>> camera_states;
 
-  std::queue<std::shared_ptr<ImageFuture>> future_queue;
-  std::mutex future_queue_mtx;
-  std::condition_variable future_queue_cv;  
+  ImageTime find_earliest_img_time()
+  {
+    ImageTime earliest_time(std::numeric_limits<double>::max(), std::numeric_limits<uint64_t>::max());
 
-  std::queue<std::shared_ptr<ImageFuture>> processed_image_queue;
-  std::mutex processed_image_queue_mtx;
-  std::condition_variable processed_image_queue_push_cv; // notify on pushing
-  std::condition_variable processed_image_queue_pop_cv; // notify on poping
+
+    for (auto &cs : camera_states)
+    {
+      auto camera_first_img_time = cs->get_first_img_time();
+      if (camera_first_img_time.raw_nsec_time < earliest_time.raw_nsec_time)
+      {
+        earliest_time = camera_first_img_time;
+      }
+    }
+
+    return earliest_time;
+  }
+
+  ofstream fout_camera, fout_colmap;
+  void initializeColmapOutputs();
 };
 #endif

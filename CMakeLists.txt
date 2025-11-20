@@ -118,6 +118,7 @@ include_directories(
 )
 
 # Add libraries
+add_library(camera_state src/camera_state.cpp src/camera_state_bag_reader.cpp)
 add_library(vio src/vio.cpp src/frame.cpp src/visual_point.cpp)
 add_library(lio src/voxel_map.cpp)
 add_library(pre src/preprocess.cpp)
@@ -130,6 +131,7 @@ add_executable(fastlivo_mapping src/main.cpp)
 # Link libraries to the executable
 target_link_libraries(fastlivo_mapping
   laser_mapping
+  camera_state
   vio
   lio
   pre

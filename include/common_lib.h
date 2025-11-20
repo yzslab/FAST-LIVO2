@@ -67,12 +67,20 @@ struct ImageTime
   ImageTime(double in_time, uint64_t in_raw_nsec_time) : time(in_time), raw_nsec_time(in_raw_nsec_time) {};
 };
 
+struct CameraImage
+{
+  int camera_id;
+  cv::Mat img;
+
+  CameraImage(int camera_id_in, cv::Mat img_in) : camera_id(camera_id_in), img(img_in) {};
+};
+
 struct MeasureGroup
 {
   double vio_time;
   double lio_time;
   deque<sensor_msgs::Imu::ConstPtr> imu;
-  cv::Mat img;
+  std::vector<CameraImage> imgs;
   MeasureGroup()
   {
     vio_time = 0.0;
