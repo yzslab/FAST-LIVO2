@@ -84,6 +84,10 @@ cv::Mat CameraState::getImageFromMsg(const sensor_msgs::CompressedImageConstPtr 
 
 bool CameraState::has_time(double time)
 {
+    if (img_time_buffer.empty()) {
+        return false;
+    }
+    // NOTE: do not add abs() here, as dropping previous images relies on this method
     double diff = get_first_img_time().time - time;
     auto has_time = diff < time_tolerance;
 

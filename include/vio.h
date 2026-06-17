@@ -107,6 +107,7 @@ public:
   double image_resize_factor;
   int raw_width, raw_height;
   // TODO: more complicated camera
+  std::string cam_model;
   double raw_fx, raw_fy, raw_cx, raw_cy, k1, k2, p1, p2;
   double fx, fy, cx, cy;
   int patch_pyrimid_level, patch_size, patch_size_total, patch_size_half, border, warp_len;

@@ -132,9 +132,13 @@ void VIOManager::initializeVIO()
 
   if(colmap_output_en)
   {
+    std::string colmap_camera_model = "OPENCV";
+    if (cam_model == "EquidistantCamera") {
+      colmap_camera_model = "OPENCV_FISHEYE";
+    }
     pinhole_cam = dynamic_cast<vk::PinholeCamera*>(cam);
-    fout_camera << camera_id + 1 << " OPENCV " << raw_width << " " << raw_height << " "
-        << std::fixed << std::setprecision(6)  // 控制浮点数精度为10位
+    fout_camera << camera_id + 1 << " " << colmap_camera_model << " " << raw_width << " " << raw_height << " "
+        << std::fixed << std::setprecision(std::numeric_limits<double>::max_digits10)
         << raw_fx << " " << raw_fy << " "
         << raw_cx + 0.5 << " " << raw_cy + 0.5 << " "
         << k1 << " " << k2 << " " << p1 << " " << p2 << std::endl;
@@ -1777,7 +1781,7 @@ void VIOManager::dumpDataForColmap(uint64_t img_raw_nsec_time)
   Eigen::Quaterniond q(new_frame_->T_f_w_.rotation_matrix());
   Eigen::Vector3d t = new_frame_->T_f_w_.translation();
   fout_colmap << cnt << " "
-            << std::fixed << std::setprecision(6)  // 保证浮点数精度为6位
+            << std::fixed << std::setprecision(std::numeric_limits<double>::max_digits10)  // 保证 dobule 精度
             << q.w() << " " << q.x() << " " << q.y() << " " << q.z() << " "
             << t.x() << " " << t.y() << " " << t.z() << " "
             << camera_id + 1 << " "  // CAMERA_ID (假设相机ID为1)

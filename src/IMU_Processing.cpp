@@ -494,7 +494,7 @@ void ImuProcess::UndistortPcl(LidarMeasureGroup &lidar_meas, StatesGroup &state_
   if (lidar_meas.lio_vio_flg == LIO)
   {
     auto it_pcl = pcl_wait_proc.points.end() - 1;
-    M3D extR_Ri(Lid_rot_to_IMU.transpose() * state_inout.rot_end.transpose());
+    M3D extR_Ri(Lid_rot_to_IMU.transpose() * state_inout.rot_end.transpose());  // IMU2LiDAR @ WORLD2IMU -> WORLD2LiDAR
     V3D exrR_extT(Lid_rot_to_IMU.transpose() * Lid_offset_to_IMU);
     for (auto it_kp = IMUpose.end() - 1; it_kp != IMUpose.begin(); it_kp--)
     {
@@ -516,7 +516,7 @@ void ImuProcess::UndistortPcl(LidarMeasureGroup &lidar_meas, StatesGroup &state_
         dt = it_pcl->curvature / double(1000) - head->offset_time;
 
         /* Transform to the 'end' frame */
-        M3D R_i(R_imu * Exp(angvel_avr, dt));
+        M3D R_i(R_imu * Exp(angvel_avr, dt));  // IMU2WORLD @ POINT_T_IMU_to_HEAD_IMU -> POINT_T_IMU_TO_WORLD
         V3D T_ei(pos_imu + vel_imu * dt + 0.5 * acc_imu * dt * dt - state_inout.pos_end);
 
         V3D P_i(it_pcl->x, it_pcl->y, it_pcl->z);

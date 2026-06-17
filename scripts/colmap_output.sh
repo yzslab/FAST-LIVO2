@@ -26,3 +26,4 @@ for dir in "${TARGET_DIRS[@]}"; do
     fi
 done
 
+rosparam get / >${BASE_DIR}/Log/config.yaml

@@ -239,11 +239,17 @@ public:
 
   ImageTime find_earliest_img_time()
   {
+    // This method should only be invoked when at least one camera is not empty
+
     ImageTime earliest_time(std::numeric_limits<double>::max(), std::numeric_limits<uint64_t>::max());
 
 
     for (auto &cs : camera_states)
     {
+      if (cs->empty())
+      {
+        continue;
+      }
       auto camera_first_img_time = cs->get_first_img_time();
       if (camera_first_img_time.raw_nsec_time < earliest_time.raw_nsec_time)
       {
@@ -252,6 +258,11 @@ public:
     }
 
     return earliest_time;
+  }
+
+  bool is_bag_file_mode()
+  {
+    return bag_files.size() > 0;
   }
 
   ofstream fout_camera, fout_colmap;

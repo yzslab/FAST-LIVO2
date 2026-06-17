@@ -169,6 +169,7 @@ void LIVMapper::initializeComponents()
     if (!vk::camera_loader::loadFromRosNs(
       full_camera_ns, 
       vio_manager->cam,
+      vio_manager->cam_model,
       vio_manager->raw_width,
       vio_manager->raw_height,
       vio_manager->raw_fx,
@@ -264,20 +265,20 @@ void LIVMapper::initializeComponents()
 
     if (pattern[0] == '~') {
       pattern = getenv("HOME") + pattern.substr(1);
-
-      glob_t globbuf;
-      int glob_ret = glob(pattern.c_str(), 0, NULL, &globbuf);
-      if (glob_ret < 0) {
-        perror("glob()");
-        exit(1);
-      }
-
-      for (int i = 0; i < globbuf.gl_pathc; ++i) {
-        bag_files.emplace_back(globbuf.gl_pathv[i]);
-      }
-
-      globfree(&globbuf);
     }
+
+    glob_t globbuf;
+    int glob_ret = glob(pattern.c_str(), 0, NULL, &globbuf);
+    if (glob_ret < 0) {
+      perror("glob()");
+      exit(1);
+    }
+
+    for (int i = 0; i < globbuf.gl_pathc; ++i) {
+      bag_files.emplace_back(globbuf.gl_pathv[i]);
+    }
+
+    globfree(&globbuf);
   }
 
   if (bag_file_paths.length() > 0) {
@@ -480,6 +481,10 @@ void LIVMapper::handleVIO()
   //   vio_manager->plot_flag = false;
   // }
 
+  Eigen::SelfAdjointEigenSolver<Matrix<double, DIM_STATE, DIM_STATE>> es(_state.cov);
+  double eigen_value_sum = es.eigenvalues().sum();
+  ROS_INFO("[ LIO ] cov=%f", eigen_value_sum);
+
   // TODO: update using the camera with the largest FoV first
   for (auto &camera_image : LidarMeasures.measures.back().imgs)
   {
@@ -491,6 +496,9 @@ void LIVMapper::handleVIO()
       LidarMeasures.last_lio_update_time - _first_lidar_time,
       LidarMeasures.measures.back().img_raw_nsec_time
     );
+    Eigen::SelfAdjointEigenSolver<Matrix<double, DIM_STATE, DIM_STATE>> es(_state.cov);
+    double eigen_value_sum = es.eigenvalues().sum();
+    ROS_INFO("[ VIO ][%s] cov=%f", camera_states[vio_manager->camera_id]->ns.c_str(), eigen_value_sum);
   }
 
   // vio_manager->processFrame(LidarMeasures.measures.back().img, _pv_list, voxelmap_manager->voxel_map_, LidarMeasures.last_lio_update_time - _first_lidar_time, LidarMeasures.measures.back().img_raw_nsec_time);
@@ -932,6 +940,9 @@ void LIVMapper::standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
   {
     ROS_ERROR("lidar loop back, clear buffer");
     lid_raw_data_buffer.clear();
+    // if (bag_files.size() > 0) {
+    //   is_paused = true;
+    // }
   }
   // ROS_INFO("get point cloud at time: %.6f", msg->header.stamp.toSec());
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
@@ -1011,7 +1022,10 @@ void LIVMapper::imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
   {
     mtx_buffer.unlock();
     sig_buffer.notify_all();
-    ROS_ERROR("imu loop back, offset: %lf \n", last_timestamp_imu - timestamp);
+    ROS_ERROR("imu loop back at %lu, offset: %lf \n", msg->header.stamp.toNSec(), last_timestamp_imu - timestamp);
+    // if (bag_files.size() > 0) {
+    //   is_paused = true;
+    // }
     return;
   }
 
@@ -1154,14 +1168,48 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
 {
   if (lid_raw_data_buffer.empty() && lidar_en) return false;
   // if (img_buffer.empty() && img_en) return false;
+  
+  // states for non-bag file mode
+  const static int CONTINUE_ON_N_IMAGE_OVER = 10;
+  static bool has_initialized = false;
+
   if (img_en) {
-    for (auto &cs : camera_states)
-    {
-      if (cs->empty() == true) {
-        return false;
+    if (is_bag_file_mode()) {
+        for (auto &cs : camera_states)
+        {
+          if (cs->empty() == true && cs->has_image_extraction_finished == false) {
+            return false;
+          }
+        }
+    } else {
+      bool force_continue = false;
+      bool has_empty_image_camera = false;
+
+      for (auto &cs : camera_states)
+      {
+        if (cs->img_buffer.size() > CONTINUE_ON_N_IMAGE_OVER) {
+          force_continue = true;
+        }
+        if (cs->empty() == true) {
+          has_empty_image_camera = true;
+        }
+      }
+
+      if (has_empty_image_camera == true) {
+        if (force_continue == false) {
+          return false;
+        }
+
+        if (has_initialized == false) {
+            ROS_WARN("Skipping forced continuation due to missing initialization");
+            return false;
+        }
+
+        ROS_WARN("Forced continuation");
       }
     }
   }
+
   if (imu_buffer.empty() && imu_en) return false;
 
   switch (slam_mode_)
@@ -1255,6 +1303,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
         return false;
       }
 
+      // make sure that all the data before the first image have reached
       if (img_capture_time > lid_newest_time || img_capture_time > imu_newest_time)
       {
         // ROS_ERROR("lost first camera frame");
@@ -1269,7 +1318,9 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       // printf("[ Data Cut ] img_capture_time: %lf \n", img_capture_time);
       m.imu.clear();
       m.lio_time = img_capture_time;
+
       mtx_buffer.lock();
+      // extract all IMU frames before the earliest image
       while (!imu_buffer.empty())
       {
         if (imu_buffer.front()->header.stamp.toSec() > m.lio_time) break;
@@ -1330,6 +1381,9 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       // printf("[ Data Cut ] pcl_proc_cur number: %d \n", meas.pcl_proc_cur
       // ->points.size()); printf("[ Data Cut ] LIO process time: %lf \n",
       // omp_get_wtime() - t0);
+
+      has_initialized = true;
+
       return true;
     }
 

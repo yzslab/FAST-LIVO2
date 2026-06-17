@@ -204,6 +204,8 @@ void CameraState::bag_image_reader(void)
     view.addQuery(i, rosbag::TopicQuery(topic + "/compressed"));
   }
 
+  auto n_mesages = view.size();
+
   auto thread_arg = ImageExtractorArgs{
       this,
       &view};
@@ -245,6 +247,8 @@ void CameraState::bag_image_reader(void)
     );
     ++n_consumed_images;
 
+    ROS_INFO("[%s]progress: %d/%d", topic.c_str(), n_consumed_images, n_mesages);
+
     // Has finished?
     if (has_image_extraction_finished && n_consumed_images == n_extracted_images)
     {
@@ -252,7 +256,7 @@ void CameraState::bag_image_reader(void)
     }
   }
 
-  ROS_INFO("Image processing completed");
+  ROS_INFO("[%s]Image processing completed", topic.c_str());
 
   return;
 }
