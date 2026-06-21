@@ -393,7 +393,7 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
 
     for (int j = 0; j < 3; j++)
     {
-      loc_xyz[j] = floor(pt_w[j] / voxel_size);
+      loc_xyz[j] = pt_w[j] / voxel_size;
       if (loc_xyz[j] < 0) { loc_xyz[j] -= 1.0; }
     }
     VOXEL_LOCATION position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
@@ -509,7 +509,7 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
 
         for (int j = 0; j < 3; j++)
         {
-          loc_xyz[j] = floor(sample_point_w[j] / voxel_size);
+          loc_xyz[j] = sample_point_w[j] / voxel_size;
           if (loc_xyz[j] < 0) { loc_xyz[j] -= 1.0; }
         }
 
@@ -572,7 +572,7 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
         {
           for (int j = 0; j < 3; j++)
           {
-            loc_xyz[j] = floor(sample_point_w[j] / plane_map_voxel_size);
+            loc_xyz[j] = sample_point_w[j] / plane_map_voxel_size;
             if (loc_xyz[j] < 0) { loc_xyz[j] -= 1.0; }
           }
           VOXEL_LOCATION sample_pos(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
