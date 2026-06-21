@@ -385,6 +385,7 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
 
   // printf("pg size: %zu \n", pg.size());
 
+  // 3D Point to Depth Map (it)
   for (int i = 0; i < pg.size(); i++)
   {
     // double t0 = omp_get_wtime();
@@ -618,11 +619,12 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
       VisualPoint *pt = retrieve_voxel_points[i];
       // visual_sub_map_cur.push_back(pt); // before
 
-      V2D pc(new_frame_->w2c(pt->pos_));
+      V2D pc(new_frame_->w2c(pt->pos_)); // pixel coordinate
 
       // cv::circle(img_cp, cv::Point2f(pc[0], pc[1]), 3, cv::Scalar(0, 0, 255), -1, 8); // Green Sparse Align tracked
 
-      V3D pt_cam(new_frame_->w2f(pt->pos_));
+      // Skip this point if depth is not continuous
+      V3D pt_cam(new_frame_->w2f(pt->pos_)); // camera coordinate
       bool depth_continous = false;
       for (int u = -patch_size_half; u <= patch_size_half; u++)
       {
@@ -1555,6 +1557,8 @@ void VIOManager::updateState(cv::Mat img, int level)
     // int max_threads = omp_get_max_threads();
     // int desired_threads = std::min(max_threads, total_points);
     // omp_set_num_threads(desired_threads);
+
+    // auto n_used_points = 0;
   
     #ifdef MP_EN
       omp_set_num_threads(MP_PROC_NUM);
@@ -1599,11 +1603,119 @@ void VIOManager::updateState(cv::Mat img, int level)
       double inv_ref_expo = visual_submap->inv_expo_list[i];
       // ROS_ERROR("inv_ref_expo: %.3lf, state->inv_expo_time: %.3lf\n", inv_ref_expo, state->inv_expo_time);
 
+      // if (img.isContinuous() == false)
+      // {
+      //   ROS_ERROR("img.isContinuous() == false");
+      //   continue;
+      // }
+
+      /*
+      img_ptr[scale]: COL + scale
+      img_ptr[scale * 2]: COL + 2 * scale
+      img_ptr[scale * width + scale]: ROW + scale, COL + scale
+      img_ptr[scale * width + scale * 2]: ROW + scale, COL + 2 * scale
+      img_ptr[-scale]: COL - scale
+      img_ptr[scale * width - scale]: ROW + scale, COL - scale
+      img_ptr[scale * width]: ROW + scale
+
+      img_ptr[scale + scale * width]: ROW + scale, COL + scale
+      img_ptr[width * scale * 2]: ROW + 2 * scale
+      img_ptr[width * scale * 2 + scale]: ROW + 2 * scale, COL + scale
+      img_ptr[-scale * width]: ROW - scale
+      img_ptr[-scale * width + scale]: ROW - scale, COL + scale
+
+      COL + scale
+      COL + 2 * scale
+      COL - scale
+      ROW + scale
+      ROW + 2 * scale
+      ROW - scale
+      */
+      auto half_scaled_patch_size = patch_size_half * scale;
+      auto row_index_min = v_ref_i - half_scaled_patch_size - scale;
+      auto row_index_max = v_ref_i - half_scaled_patch_size + (patch_size - 1) * scale + 2 * scale;
+      auto col_index_min = u_ref_i - half_scaled_patch_size - scale;
+      auto col_index_max = u_ref_i - half_scaled_patch_size + (patch_size - 1) * scale + 2 * scale;
+
+      if (row_index_min < 0)
+      {
+        ROS_WARN("Skip an out-of-bounds visual point: row_index_min < 0");
+        continue;
+      }
+      if (row_index_max >= height)
+      {
+        ROS_WARN("Skip an out-of-bounds visual point: row_index_max >= height");
+        continue;
+      }
+      if (col_index_min < 0)
+      {
+        ROS_WARN("Skip an out-of-bounds visual point: col_index_min < 0");
+        continue;
+      }
+      if (col_index_max >= width)
+      {
+        ROS_WARN("Skip an out-of-bounds visual point: col_index_max >= width");
+        continue;
+      }
+
+      // n_used_points += 1;
+
       for (int x = 0; x < patch_size; x++)
       {
+        // auto row_index_base = v_ref_i + x * scale - patch_size_half * scale;
+        // auto col_index_base = u_ref_i - patch_size_half * scale;
+        // if (row_index_base < 0)
+        // {
+        //   ROS_ERROR("row_index_base(%d) < 0", row_index_base);
+        //   exit(1);
+        // }
+        // if (col_index_base < 0)
+        // {
+        //   ROS_ERROR("col_index_base(%d) < 0", col_index_base);
+        //   exit(1);
+        // }
+        // if (row_index_base >= height)
+        // {
+        //   ROS_ERROR("row_index_base(%d) >= height(%d)", row_index_base, height);
+        //   exit(1);
+        // }
+        // if (col_index_base >= width)
+        // {
+        //   ROS_ERROR("col_index_base(%d) >= width(%d)", col_index_base, width);
+        //   exit(1);
+        // }
+
         uint8_t *img_ptr = (uint8_t *)img.data + (v_ref_i + x * scale - patch_size_half * scale) * width + u_ref_i - patch_size_half * scale;
         for (int y = 0; y < patch_size; ++y, img_ptr += scale)
         {
+          // if (col_index_base + scale >= width) {
+          //   ROS_ERROR("col_index_base(%d) + scale(%d) >= width(%d)", col_index_base, scale, width);
+          //   exit(1);
+          // }
+          // if (col_index_base - scale < 0) {
+          //   ROS_ERROR("col_index_base(%d) - scale(%d) < 0", col_index_base, scale);
+          //   exit(1);
+          // }
+          // if (col_index_base + 2 * scale >= width) {
+          //   ROS_ERROR("col_index_base(%d) + 2 * scale(%d) >= width(%d)", col_index_base, scale, width);
+          //   exit(1);
+          // }
+
+          // col_index_base += scale;
+
+          // if (row_index_base + scale >= height) {
+          //   ROS_ERROR("row_index_base(%d) + scale(%d) >= height(%d)", row_index_base, scale, height);
+          //   exit(1);
+          // }
+          // if (row_index_base - scale < 0) {
+          //   ROS_ERROR("row_index_base(%d) - scale(%d) < 0", row_index_base, scale);
+          //   exit(1);
+          // }
+          // if (row_index_base + 2 * scale >= height) {
+          //   ROS_ERROR("row_index_base(%d) + 2 * scale(%d) >= height(%d)", row_index_base, scale, height);
+          //   exit(1);
+          // }
+
           float du =
               0.5f *
               ((w_ref_tl * img_ptr[scale] + w_ref_tr * img_ptr[scale * 2] + w_ref_bl * img_ptr[scale * width + scale] +
@@ -1688,6 +1800,8 @@ void VIOManager::updateState(cv::Mat img, int level)
     }
 
     update_ekf_time += omp_get_wtime() - t3;
+
+    // ROS_INFO("%d out of %d visual points used", n_used_points, total_points);
 
     if (iteration == max_iterations || EKF_end) break;
   }
