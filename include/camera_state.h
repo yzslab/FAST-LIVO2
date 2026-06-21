@@ -33,9 +33,9 @@ struct CameraState
   // double img_time_offset = 0.;
 
   // treat as equal if time difference < time_tolerance
-  double time_tolerance = 0.05; // 50ms
+  // double time_tolerance = 0.05; // 50ms
   // double time_tolerance = 0.025; // 25ms
-  // double time_tolerance = 0.001;
+  double time_tolerance = 0.00001;  // 0
 
   // double exposure_time_init = 0.;
 
