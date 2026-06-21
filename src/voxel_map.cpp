@@ -595,7 +595,8 @@ V3F VoxelMapManager::RGBFromVoxel(const V3D &input_point)
   int64_t loc_xyz[3];
   for (int j = 0; j < 3; j++)
   {
-    loc_xyz[j] = floor(input_point[j] / config_setting_.max_voxel_size_);
+    loc_xyz[j] = input_point[j] / config_setting_.max_voxel_size_;
+    if (loc_xyz[j] < 0) { loc_xyz[j] -= 1.0; }
   }
 
   VOXEL_LOCATION position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
