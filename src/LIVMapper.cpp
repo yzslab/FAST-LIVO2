@@ -58,6 +58,8 @@ LIVMapper::LIVMapper(ros::NodeHandle &nh)
   initializeComponents();
   path.header.stamp = ros::Time::now();
   path.header.frame_id = "camera_init";
+
+  vio_colorized = false;
 }
 
 LIVMapper::~LIVMapper() {
@@ -563,6 +565,7 @@ void LIVMapper::handleVIO()
             << _state.bias_a.transpose() << " " << V3D(_state.inv_expo_time, 0, 0).transpose() << " " << feats_undistort->points.size() << std::endl;
 
   ++vio_iterations;
+  vio_colorized = true;
 }
 
 void LIVMapper::handleLIO() 
@@ -672,7 +675,23 @@ void LIVMapper::handleLIO()
   {
     RGBpointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudWorld->points[i]);
   }
-  *pcl_w_wait_pub = *laserCloudWorld;
+
+  if (img_en)
+  {
+    if (vio_colorized == false)
+    {
+      *pcl_w_wait_pub += *laserCloudWorld;
+    }
+    else
+    {
+      *pcl_w_wait_pub = *laserCloudWorld;
+      vio_colorized = false;
+    }
+  }
+  else
+  {
+    *pcl_w_wait_pub = *laserCloudWorld;
+  }
 
   if (!img_en) publish_frame_world(pubLaserCloudFullRes, 0);
   if (pub_effect_point_en) publish_effect_world(pubLaserCloudEffect, voxelmap_manager->ptpl_list_);
@@ -973,9 +992,9 @@ void LIVMapper::standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
   {
     ROS_ERROR("lidar loop back, clear buffer");
     lid_raw_data_buffer.clear();
-    // if (bag_files.size() > 0) {
-    //   is_paused = true;
-    // }
+    if (is_bag_file_mode() > 0) {
+      is_paused = true;
+    }
   }
   // ROS_INFO("get point cloud at time: %.6f", msg->header.stamp.toSec());
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
@@ -1056,9 +1075,9 @@ void LIVMapper::imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     mtx_buffer.unlock();
     sig_buffer.notify_all();
     ROS_ERROR("imu loop back at %lu, offset: %lf \n", msg->header.stamp.toNSec(), last_timestamp_imu - timestamp);
-    // if (bag_files.size() > 0) {
-    //   is_paused = true;
-    // }
+    if (is_bag_file_mode()) {
+      is_paused = true;
+    }
     return;
   }
 
@@ -1245,6 +1264,8 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
 
   if (imu_buffer.empty() && imu_en) return false;
 
+  static bool force_lio = false;
+
   switch (slam_mode_)
   {
   case ONLY_LIO:
@@ -1322,7 +1343,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       double lid_newest_time = lid_header_time_buffer.back() + lid_raw_data_buffer.back()->points.back().curvature / double(1000);
       double imu_newest_time = imu_buffer.back()->header.stamp.toSec();
       
-      ROS_INFO("img_capture_time=%f, lid_header_time_buffer.fromt()=%f, last_lio_update_time=%f, lid_newest_time=%f, imu_newest_time=%f", img_capture_time, lid_header_time_buffer.front(), meas.last_lio_update_time, lid_newest_time, imu_newest_time);
+      ROS_INFO("img_capture_time=%f, lid_header_time_buffer.front()=%f, last_lio_update_time=%f, lid_newest_time=%f, imu_newest_time=%f", img_capture_time, lid_header_time_buffer.front(), meas.last_lio_update_time, lid_newest_time, imu_newest_time);
 
       if (img_capture_time < meas.last_lio_update_time + 0.00001)
       {
@@ -1339,10 +1360,25 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       // make sure that all the data before the first image have reached
       if (img_capture_time > lid_newest_time || img_capture_time > imu_newest_time)
       {
-        // ROS_ERROR("lost first camera frame");
+        ROS_ERROR("waiting lidar and imu");
         // printf("img_capture_time, lid_newest_time, imu_newest_time: %lf , %lf
         // , %lf \n", img_capture_time, lid_newest_time, imu_newest_time);
         return false;
+      }
+
+      auto n_lidar_frame_before_image = count_lidar_frame_before_given_time(img_capture_time);
+      if (n_lidar_frame_before_image > 1 && p_imu->imu_need_init == false)
+      {
+        // auto first_lidar_frame_time = lid_header_time_buffer.front();
+        auto time_diff = img_capture_time - meas.last_lio_update_time;
+        auto time_interval = time_diff / n_lidar_frame_before_image;
+        img_capture_time = meas.last_lio_update_time + time_interval;
+        ROS_INFO("time_interval=%f, img_capture_time=%f", time_interval, img_capture_time);
+        force_lio = true;
+      }
+      else
+      {
+        force_lio = false;
       }
 
       struct MeasureGroup m;
@@ -1425,6 +1461,11 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       auto earliest_image_time = find_earliest_img_time();
       double img_capture_time = earliest_image_time.time + exposure_time_init;
       meas.lio_vio_flg = VIO;
+
+      if (force_lio) {
+        return false;
+      }
+
       // printf("[ Data Cut ] VIO \n");
       meas.measures.clear();
       double imu_time = imu_buffer.front()->header.stamp.toSec();

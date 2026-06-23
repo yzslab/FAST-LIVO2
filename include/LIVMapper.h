@@ -237,6 +237,8 @@ public:
 
   std::vector<std::shared_ptr<CameraState>> camera_states;
 
+  bool vio_colorized;
+
   ImageTime find_earliest_img_time()
   {
     // This method should only be invoked when at least one camera is not empty
@@ -258,6 +260,22 @@ public:
     }
 
     return earliest_time;
+  }
+
+  int count_lidar_frame_before_given_time(double timestamp)
+  {
+    int n_lidar_frames = 0;
+
+    for (const auto &lidar_time : lid_header_time_buffer)
+    {
+      if (lidar_time > timestamp)
+      {
+        break;
+      }
+      ++n_lidar_frames;
+    }
+
+    return n_lidar_frames;
   }
 
   bool is_bag_file_mode()
