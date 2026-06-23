@@ -36,6 +36,8 @@ public:
   bool has_ref_patch_;          //!< True if the point has a reference patch.
   Feature *ref_patch;           //!< Reference patch of the point.
 
+  int32_t last_used_at_iteration; // Only record create time currently
+
   VisualPoint(const Vector3d &pos);
   ~VisualPoint();
   void findMinScoreFeature(const Vector3d &framepos, Feature *&ftr) const;

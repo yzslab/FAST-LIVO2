@@ -156,13 +156,14 @@ public:
   ~VIOManager();
   void updateStateInverse(cv::Mat img, int level);
   void updateState(cv::Mat img, int level);
-  void processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &feat_map, double img_time, uint64_t img_raw_nsec_time);
-  void retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &plane_map);
-  void generateVisualMapPoints(cv::Mat img, vector<pointWithVar> &pg);
+  void processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &feat_map, double img_time, uint64_t img_raw_nsec_time, int32_t vio_iterations);
+  void retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &plane_map, int32_t vio_iterations);
+  void generateVisualMapPoints(cv::Mat img, vector<pointWithVar> &pg, int32_t vio_iterations);
   void setImuToLidarExtrinsic(const V3D &transl, const M3D &rot);
   void setLidarToCameraExtrinsic(vector<double> &R, vector<double> &P);
   void initializeVIO();
-  void getImagePatch(cv::Mat img, V2D pc, float *patch_tmp, int level);
+  bool isImagePatchInFrame(const int v_ref_i, const int u_ref_i, const int scale);
+  bool getImagePatch(cv::Mat img, V2D pc, float *patch_tmp, int level);
   void computeProjectionJacobian(V3D p, MD(2, 3) & J);
   void computeJacobianAndUpdateEKF(cv::Mat img);
   void resetGrid();

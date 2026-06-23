@@ -19,6 +19,7 @@ VisualPoint::VisualPoint(const Vector3d &pos)
     : pos_(pos), previous_normal_(Vector3d::Zero()), normal_(Vector3d::Zero()),
       is_converged_(false), is_normal_initialized_(false), has_ref_patch_(false)
 {
+    last_used_at_iteration = -65536;
 }
 
 VisualPoint::~VisualPoint() 

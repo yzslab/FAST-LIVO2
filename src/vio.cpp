@@ -202,7 +202,35 @@ void VIOManager::computeProjectionJacobian(V3D p, MD(2, 3) & J)
   J(1, 2) = -fy * y * z_inv_2;
 }
 
-void VIOManager::getImagePatch(cv::Mat img, V2D pc, float *patch_tmp, int level)
+bool VIOManager::isImagePatchInFrame(const int v_ref_i, const int u_ref_i, const int scale)
+{
+  auto half_scaled_patch_size = patch_size_half * scale;
+  auto row_index_min = v_ref_i - half_scaled_patch_size;
+  auto row_index_max = v_ref_i - half_scaled_patch_size + (patch_size - 1) * scale + scale;
+  auto col_index_min = u_ref_i - half_scaled_patch_size;
+  auto col_index_max = u_ref_i - half_scaled_patch_size + (patch_size - 1) * scale + scale;
+
+  if (row_index_min < 0)
+  {
+    return false;
+  }
+  if (row_index_max >= height)
+  {
+    return false;
+  }
+  if (col_index_min < 0)
+  {
+    return false;
+  }
+  if (col_index_max >= width)
+  {
+    return false;
+  }
+  return true;
+}
+
+
+bool VIOManager::getImagePatch(cv::Mat img, V2D pc, float *patch_tmp, int level)
 {
   const float u_ref = pc[0];
   const float v_ref = pc[1];
@@ -215,6 +243,12 @@ void VIOManager::getImagePatch(cv::Mat img, V2D pc, float *patch_tmp, int level)
   const float w_ref_tr = subpix_u_ref * (1.0 - subpix_v_ref);
   const float w_ref_bl = (1.0 - subpix_u_ref) * subpix_v_ref;
   const float w_ref_br = subpix_u_ref * subpix_v_ref;
+
+  if (isImagePatchInFrame(v_ref_i, u_ref_i, scale) == false)
+  {
+    return false;
+  }
+
   for (int x = 0; x < patch_size; x++)
   {
     uint8_t *img_ptr = (uint8_t *)img.data + (v_ref_i - patch_size_half * scale + x * scale) * width + (u_ref_i - patch_size_half * scale);
@@ -224,6 +258,8 @@ void VIOManager::getImagePatch(cv::Mat img, V2D pc, float *patch_tmp, int level)
           w_ref_tl * img_ptr[0] + w_ref_tr * img_ptr[scale] + w_ref_bl * img_ptr[scale * width] + w_ref_br * img_ptr[scale * width + scale];
     }
   }
+
+  return true;
 }
 
 void VIOManager::insertPointIntoVoxelMap(VisualPoint *pt_new)
@@ -351,7 +387,7 @@ double VIOManager::calculateNCC(float *ref_patch, float *cur_patch, int patch_si
   return numerator / sqrt(demoniator1 * demoniator2 + 1e-10);
 }
 
-void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &plane_map)
+void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &plane_map, int32_t vio_iterations)
 {
   if (feat_map.size() <= 0) return;
   double ts0 = omp_get_wtime();
@@ -440,6 +476,8 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
   // double t1 = omp_get_wtime();
   vector<VOXEL_LOCATION> DeleteKeyList;
 
+  int n_skipped_visual_point = 0;
+
   for (auto &iter : sub_feat_map)
   {
     VOXEL_LOCATION position = iter.first;
@@ -459,6 +497,7 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
         VisualPoint *pt = voxel_points[i];
         if (pt == nullptr) continue;
         if (pt->obs_.size() == 0) continue;
+        if (pt->last_used_at_iteration == vio_iterations) { ++n_skipped_visual_point; continue; } // Skip if used or created by other cameras at the same iteration
 
         V3D norm_vec(new_frame_->T_f_w_.rotation_matrix() * pt->normal_);
         V3D dir(new_frame_->T_f_w_ * pt->pos_);
@@ -479,6 +518,7 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
           {
             map_dist[index] = cur_dist;
             retrieve_voxel_points[index] = pt;
+            // pt->last_used_at_iteration = vio_iterations; // Update used iteration
           }
         }
       }
@@ -534,6 +574,8 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
 
             if (pt == nullptr) continue;
             if (pt->obs_.size() == 0) continue;
+            if (pt->last_used_at_iteration == vio_iterations) { ++n_skipped_visual_point; continue; } // Skip if used or created by other cameras at the same iteration
+
 
             // sub_map_ray.push_back(pt); // cloud_visual_sub_map
             // add_sample = true;
@@ -562,6 +604,7 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
               {
                 map_dist[index] = cur_dist;
                 retrieve_voxel_points[index] = pt;
+                // pt->last_used_at_iteration = vio_iterations; // Update used iteration
               }
             }
           }
@@ -597,6 +640,8 @@ void VIOManager::retrieveFromVisualSparseMap(cv::Mat img, vector<pointWithVar> &
       // if(add_sample) sample_points.push_back(sample_points_temp);
     }
   }
+
+  ROS_INFO("%d visual points skipped", n_skipped_visual_point);
 
   for (auto &key : DeleteKeyList)
   {
@@ -810,7 +855,7 @@ void VIOManager::computeJacobianAndUpdateEKF(cv::Mat img)
   updateFrameState(*state);
 }
 
-void VIOManager::generateVisualMapPoints(cv::Mat img, vector<pointWithVar> &pg)
+void VIOManager::generateVisualMapPoints(cv::Mat img, vector<pointWithVar> &pg, int32_t vio_iterations)
 {
   if (pg.size() <= 10) return;
 
@@ -881,7 +926,12 @@ void VIOManager::generateVisualMapPoints(cv::Mat img, vector<pointWithVar> &pg)
       V2D pc(new_frame_->w2c(pt));
 
       float *patch = new float[patch_size_total];
-      getImagePatch(img, pc, patch, 0);
+      if (getImagePatch(img, pc, patch, 0) == false)
+      {
+        ROS_WARN("Skip visual point generation: out-of-bounds");
+        delete[] patch;
+        continue;
+      }
 
       VisualPoint *pt_new = new VisualPoint(pt);
 
@@ -899,6 +949,8 @@ void VIOManager::generateVisualMapPoints(cv::Mat img, vector<pointWithVar> &pg)
       else { pt_new->normal_ = pt_var.normal; }
       
       pt_new->previous_normal_ = pt_new->normal_;
+
+      pt_new->last_used_at_iteration = vio_iterations; // Prevent from being used by other cameras in the same iteration
 
       insertPointIntoVoxelMap(pt_new);
       add += 1;
@@ -934,7 +986,12 @@ void VIOManager::updateVisualMapPoints(cv::Mat img)
     bool add_flag = false;
     
     float *patch_temp = new float[patch_size_total];
-    getImagePatch(img, pc, patch_temp, 0);
+    if (getImagePatch(img, pc, patch_temp, 0) == false)
+    {
+        ROS_WARN("Skip visual point updating: out-of-bounds");
+        delete[] patch_temp;
+        continue;
+    }
     // TODO: condition: distance and view_angle
     // Step 1: time
     Feature *last_feature = pt->obs_.back();
@@ -970,6 +1027,10 @@ void VIOManager::updateVisualMapPoints(cv::Mat img)
       ftr_new->id_ = new_frame_->id_;
       ftr_new->inv_expo_time_ = state->inv_expo_time;
       pt->addFrameRef(ftr_new);
+    }
+    else
+    {
+      delete[] patch_temp;
     }
   }
   printf("[ VIO ] Update %d points in visual submap\n", update_num);
@@ -1639,22 +1700,22 @@ void VIOManager::updateState(cv::Mat img, int level)
 
       if (row_index_min < 0)
       {
-        ROS_WARN("Skip an out-of-bounds visual point: row_index_min < 0");
+        // ROS_WARN("Skip an out-of-bounds visual point: row_index_min < 0");
         continue;
       }
       if (row_index_max >= height)
       {
-        ROS_WARN("Skip an out-of-bounds visual point: row_index_max >= height");
+        // ROS_WARN("Skip an out-of-bounds visual point: row_index_max >= height");
         continue;
       }
       if (col_index_min < 0)
       {
-        ROS_WARN("Skip an out-of-bounds visual point: col_index_min < 0");
+        // ROS_WARN("Skip an out-of-bounds visual point: col_index_min < 0");
         continue;
       }
       if (col_index_max >= width)
       {
-        ROS_WARN("Skip an out-of-bounds visual point: col_index_max >= width");
+        // ROS_WARN("Skip an out-of-bounds visual point: col_index_max >= width");
         continue;
       }
 
@@ -1904,7 +1965,7 @@ void VIOManager::dumpDataForColmap(uint64_t img_raw_nsec_time)
   cnt++;
 }
 
-void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &feat_map, double img_time, uint64_t img_raw_nsec_time)
+void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &feat_map, double img_time, uint64_t img_raw_nsec_time, int32_t vio_iterations)
 {  
   assert(img_raw_nsec_time != static_cast<uint64_t>(-1));
 
@@ -1931,7 +1992,7 @@ void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unor
 
   if (colorize_only == false)
   {
-    retrieveFromVisualSparseMap(img, pg, feat_map);
+    retrieveFromVisualSparseMap(img, pg, feat_map, vio_iterations);
 
     t2 = omp_get_wtime();
 
@@ -1939,26 +2000,26 @@ void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unor
 
     t3 = omp_get_wtime();
 
-    generateVisualMapPoints(img, pg);
+    // generateVisualMapPoints(img, pg, vio_iterations);
 
     t4 = omp_get_wtime();
     
-    plotTrackedPoints();
+    // plotTrackedPoints();
 
-    if (plot_flag) projectPatchFromRefToCur(feat_map);
+    // if (plot_flag) projectPatchFromRefToCur(feat_map);
 
     t5 = omp_get_wtime();
 
-    updateVisualMapPoints(img);
+    // updateVisualMapPoints(img);
 
     t6 = omp_get_wtime();
 
-    updateReferencePatch(feat_map);
+    // updateReferencePatch(feat_map);
 
     t7 = omp_get_wtime();
   }
   
-  if(colmap_output_en)  dumpDataForColmap(img_raw_nsec_time);
+  // if(colmap_output_en)  dumpDataForColmap(img_raw_nsec_time);
 
   frame_count++;
   ave_total = ave_total * (frame_count - 1) / frame_count + (t7 - t1 - (t5 - t4)) / frame_count;
@@ -1988,9 +2049,9 @@ void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unor
   printf("\033[1;32m| %-29s | %-27lf |\033[0m\n", "computeJacobianAndUpdateEKF", t3 - t2);
   printf("\033[1;32m| %-27s   | %-27lf |\033[0m\n", "-> computeJacobian", compute_jacobian_time);
   printf("\033[1;32m| %-27s   | %-27lf |\033[0m\n", "-> updateEKF", update_ekf_time);
-  printf("\033[1;32m| %-29s | %-27lf |\033[0m\n", "generateVisualMapPoints", t4 - t3);
-  printf("\033[1;32m| %-29s | %-27lf |\033[0m\n", "updateVisualMapPoints", t6 - t5);
-  printf("\033[1;32m| %-29s | %-27lf |\033[0m\n", "updateReferencePatch", t7 - t6);
+  // printf("\033[1;32m| %-29s | %-27lf |\033[0m\n", "generateVisualMapPoints", t4 - t3);
+  // printf("\033[1;32m| %-29s | %-27lf |\033[0m\n", "updateVisualMapPoints", t6 - t5);
+  // printf("\033[1;32m| %-29s | %-27lf |\033[0m\n", "updateReferencePatch", t7 - t6);
   printf("\033[1;34m+-------------------------------------------------------------+\033[0m\n");
   printf("\033[1;32m| %-29s | %-27lf |\033[0m\n", "Current Total Time", t7 - t1 - (t5 - t4));
   printf("\033[1;32m| %-29s | %-27lf |\033[0m\n", "Average Total Time", ave_total);

@@ -458,6 +458,8 @@ void LIVMapper::stateEstimationAndMapping()
 
 void LIVMapper::handleVIO() 
 {
+  static int32_t vio_iterations = 0;
+
   euler_cur = RotMtoEuler(_state.rot_end);
   fout_pre << std::setw(20) << LidarMeasures.last_lio_update_time - _first_lidar_time << " " << euler_cur.transpose() * 57.3 << " "
             << _state.pos_end.transpose() << " " << _state.vel_end.transpose() << " " << _state.bias_g.transpose() << " "
@@ -494,11 +496,40 @@ void LIVMapper::handleVIO()
       _pv_list,
       voxelmap_manager->voxel_map_,
       LidarMeasures.last_lio_update_time - _first_lidar_time,
-      LidarMeasures.measures.back().img_raw_nsec_time
+      LidarMeasures.measures.back().img_raw_nsec_time,
+      vio_iterations
     );
     Eigen::SelfAdjointEigenSolver<Matrix<double, DIM_STATE, DIM_STATE>> es(_state.cov);
     double eigen_value_sum = es.eigenvalues().sum();
     ROS_INFO("[ VIO ][%s] cov=%f", camera_states[vio_manager->camera_id]->ns.c_str(), eigen_value_sum);
+  }
+
+  // Update all the poses of cameras, and generate visual points
+  for (auto &camera_image : LidarMeasures.measures.back().imgs)
+  {
+    auto vio_manager = vio_managers[camera_image.camera_id];
+    // Update frame pose
+    vio_manager->updateFrameState(_state);
+
+    if (vio_manager->colorize_only == false) {
+      // Generate visual points
+      vio_manager->generateVisualMapPoints(
+        camera_image.img,
+        _pv_list,
+        vio_iterations
+      );
+
+      vio_manager->plotTrackedPoints();
+      if (vio_manager->plot_flag) vio_manager->projectPatchFromRefToCur(voxelmap_manager->voxel_map_);
+
+      vio_manager->updateVisualMapPoints(camera_image.img);
+
+      vio_manager->updateReferencePatch(voxelmap_manager->voxel_map_);
+    }
+
+    if (vio_manager->colmap_output_en) {
+      vio_manager->dumpDataForColmap(LidarMeasures.measures.back().img_raw_nsec_time);
+    }
   }
 
   // vio_manager->processFrame(LidarMeasures.measures.back().img, _pv_list, voxelmap_manager->voxel_map_, LidarMeasures.last_lio_update_time - _first_lidar_time, LidarMeasures.measures.back().img_raw_nsec_time);
@@ -530,6 +561,8 @@ void LIVMapper::handleVIO()
   fout_out << std::setw(20) << LidarMeasures.last_lio_update_time - _first_lidar_time << " " << euler_cur.transpose() * 57.3 << " "
             << _state.pos_end.transpose() << " " << _state.vel_end.transpose() << " " << _state.bias_g.transpose() << " "
             << _state.bias_a.transpose() << " " << V3D(_state.inv_expo_time, 0, 0).transpose() << " " << feats_undistort->points.size() << std::endl;
+
+  ++vio_iterations;
 }
 
 void LIVMapper::handleLIO() 
@@ -539,7 +572,7 @@ void LIVMapper::handleLIO()
            << _state.pos_end.transpose() << " " << _state.vel_end.transpose() << " " << _state.bias_g.transpose() << " "
            << _state.bias_a.transpose() << " " << V3D(_state.inv_expo_time, 0, 0).transpose() << endl;
            
-  if (feats_undistort->empty() || (feats_undistort == nullptr)) 
+  if ((feats_undistort == nullptr) || feats_undistort->empty())
   {
     std::cout << "[ LIO ]: No point!!!" << std::endl;
     return;
