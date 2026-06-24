@@ -1,11 +1,15 @@
 #!/bin/bash
 
-BASE_DIR=$(/opt/ros/noetic/bin/rospack find fast_livo)
+BASE_DIR=${1}
+if [[ -z "$BASE_DIR" || "$BASE_DIR" =~ ^[[:space:]]+$ ]]; then
+    echo "A non-empty path to the target directory is required" >&2
+    exit 1
+fi
 
 TARGET_DIRS=(
-    "${BASE_DIR}/Log/PCD_frames"
-    "${BASE_DIR}/Log/Colmap/images"
-    "${BASE_DIR}/Log/Colmap/sparse/0"
+    "${BASE_DIR}/PCD_frames"
+    "${BASE_DIR}/Colmap/images"
+    "${BASE_DIR}/Colmap/sparse/0"
 )
 
 for dir in "${TARGET_DIRS[@]}"; do
@@ -26,4 +30,4 @@ for dir in "${TARGET_DIRS[@]}"; do
     fi
 done
 
-rosparam get / >${BASE_DIR}/Log/config.yaml
+rosparam get / >"${BASE_DIR}/config.yaml"
