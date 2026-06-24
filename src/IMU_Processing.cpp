@@ -12,8 +12,8 @@ which is included as part of this source code package.
 
 #include "IMU_Processing.h"
 
-ImuProcess::ImuProcess() : Eye3d(M3D::Identity()),
-                           Zero3d(0, 0, 0), b_first_frame(true), imu_need_init(true)
+ImuProcess::ImuProcess(const std::string& basic_output_dir_in) : Eye3d(M3D::Identity()),
+                           Zero3d(0, 0, 0), b_first_frame(true), imu_need_init(true), basic_output_dir(basic_output_dir_in)
 {
   init_iter_num = 1;
   cov_acc = V3D(0.1, 0.1, 0.1);
@@ -577,7 +577,7 @@ void ImuProcess::Process2(LidarMeasureGroup &lidar_meas, StatesGroup &stat, Poin
       ROS_INFO("IMU Initials: ba covarience: %.8f %.8f %.8f; bg covarience: "
                "%.8f %.8f %.8f",
                cov_bias_acc[0], cov_bias_acc[1], cov_bias_acc[2], cov_bias_gyr[0], cov_bias_gyr[1], cov_bias_gyr[2]);
-      fout_imu.open(DEBUG_FILE_DIR("imu.txt"), ios::out);
+      fout_imu.open(basic_output_dir + "/imu.txt", ios::out);
     }
 
     return;

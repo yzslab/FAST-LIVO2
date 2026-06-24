@@ -140,6 +140,8 @@ public:
 
   bool colorize_only = false;
 
+  const std::string& basic_output_dir;
+
   enum CellType
   {
     TYPE_MAP = 1,
@@ -151,7 +153,8 @@ public:
     int camera_id_in, 
     ofstream &fout_colmap_in,
     ofstream &fout_camera_in,
-    unordered_map<VOXEL_LOCATION, VOXEL_POINTS *> &feat_map_in
+    unordered_map<VOXEL_LOCATION, VOXEL_POINTS *> &feat_map_in,
+    const std::string &basic_output_dir_in
   );
   ~VIOManager();
   void updateStateInverse(cv::Mat img, int level);

@@ -16,8 +16,9 @@ VIOManager::VIOManager(
   int camera_id_in, 
   ofstream &fout_colmap_in,
   ofstream &fout_camera_in,
-  unordered_map<VOXEL_LOCATION, VOXEL_POINTS *> &feat_map_in
-) : camera_id(camera_id_in), fout_colmap(fout_colmap_in), fout_camera(fout_camera_in), feat_map(feat_map_in)
+  unordered_map<VOXEL_LOCATION, VOXEL_POINTS *> &feat_map_in,
+  const std::string& basic_output_dir_in
+) : camera_id(camera_id_in), fout_colmap(fout_colmap_in), fout_camera(fout_camera_in), feat_map(feat_map_in), basic_output_dir(basic_output_dir_in)
 {
   // downSizeFilter.setLeafSize(0.2, 0.2, 0.2);
 }
@@ -142,6 +143,7 @@ void VIOManager::initializeVIO()
         << raw_fx << " " << raw_fy << " "
         << raw_cx + 0.5 << " " << raw_cy + 0.5 << " "
         << k1 << " " << k2 << " " << p1 << " " << p2 << std::endl;
+    fout_camera.flush();
   }
   grid_num.resize(length);
   map_index.resize(length);
@@ -1175,7 +1177,7 @@ void VIOManager::projectPatchFromRefToCur(const unordered_map<VOXEL_LOCATION, Vo
   // if(new_frame_->id_ != 2) return; //124
 
   int patch_size = 25;
-  string dir = string(ROOT_DIR) + "Log/ref_cur_combine/";
+  string dir = basic_output_dir + "ref_cur_combine/";
 
   cv::Mat result = cv::Mat::zeros(height, width, CV_8UC1);
   cv::Mat result_normal = cv::Mat::zeros(height, width, CV_8UC1);
@@ -1962,6 +1964,7 @@ void VIOManager::dumpDataForColmap(uint64_t img_raw_nsec_time)
             << camera_id + 1 << " "  // CAMERA_ID (假设相机ID为1)
             << camera_id + 1 << "/" << img_raw_nsec_time << ".jpg" << std::endl;
   fout_colmap << "0.0 0.0 -1" << std::endl;
+  fout_colmap.flush();
   cnt++;
 }
 

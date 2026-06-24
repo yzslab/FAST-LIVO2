@@ -86,6 +86,7 @@ public:
   void publish_odometry(const ros::Publisher &pubOdomAftMapped);
   void publish_mavros(const ros::Publisher &mavros_pose_publisher);
   void publish_path(const ros::Publisher pubPath);
+  void scan_bag_files();
   void readParameters(ros::NodeHandle &nh);
   template <typename T> void set_posestamp(T &out);
   template <typename T> void pointBodyToWorld(const Eigen::Matrix<T, 3, 1> &pi, Eigen::Matrix<T, 3, 1> &po);
@@ -224,6 +225,7 @@ public:
   double aver_time_map_inre = 0;
   bool colmap_output_en = false;
 
+  std::string basic_output_dir;
   std::string pcd_output_dir;
   std::string colmap_output_dir;
 
@@ -283,7 +285,13 @@ public:
     return bag_files.size() > 0;
   }
 
+  std::string DEBUG_FILE_DIR(std::string name)
+  {
+    return basic_output_dir + name;
+  }
+
   ofstream fout_camera, fout_colmap;
   void initializeColmapOutputs();
+
 };
 #endif

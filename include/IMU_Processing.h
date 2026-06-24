@@ -27,7 +27,7 @@ class ImuProcess
 public:
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-  ImuProcess();
+  ImuProcess(const std::string& basic_output_dir_in);
   ~ImuProcess();
 
   void Reset();
@@ -63,6 +63,8 @@ public:
   M3D Eye3d;
   V3D Zero3d;
   int lidar_type;
+
+  const std::string& basic_output_dir;
 
 private:
   void IMU_init(const MeasureGroup &meas, StatesGroup &state, int &N);

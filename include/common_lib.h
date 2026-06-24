@@ -33,7 +33,6 @@ using namespace Sophus;
 #define SIZE_SMALL (100)
 #define VEC_FROM_ARRAY(v) v[0], v[1], v[2]
 #define MAT_FROM_ARRAY(v) v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]
-#define DEBUG_FILE_DIR(name) (string(string(ROOT_DIR) + "Log/" + name))
 
 enum LID_TYPE
 {
