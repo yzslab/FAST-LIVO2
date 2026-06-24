@@ -239,7 +239,7 @@ public:
 
   std::vector<std::shared_ptr<CameraState>> camera_states;
 
-  bool has_lidar_and_imu_extraction_finished;
+  bool is_lidar_and_imu_extraction_finished;
 
   bool vio_colorized;
 

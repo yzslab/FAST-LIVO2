@@ -260,3 +260,8 @@ void CameraState::bag_image_reader(void)
 
   return;
 }
+
+bool CameraState::is_finished()
+{
+  return has_image_extraction_finished && n_consumed_images == n_extracted_images;
+}

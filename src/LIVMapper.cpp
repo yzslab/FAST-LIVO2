@@ -103,6 +103,8 @@ LIVMapper::LIVMapper(ros::NodeHandle &nh)
   path.header.stamp = ros::Time::now();
   path.header.frame_id = "camera_init";
 
+  is_lidar_and_imu_extraction_finished = false;
+
   vio_colorized = false;
 }
 
@@ -901,23 +903,30 @@ void LIVMapper::run()
     ros::spinOnce();
     if (!sync_packages(LidarMeasures)) 
     {
-      if (is_bag_file_mode() && has_lidar_and_imu_extraction_finished) {
-        bool all_image_extracted = true;
+      if (is_bag_file_mode() && is_lidar_and_imu_extraction_finished) {
+        bool no_consumable_messages = false;
+
+        // Are all LiDAR frames or IMU frames consumed?
+        if (lid_raw_data_buffer.empty() || imu_buffer.empty())
+        {
+          no_consumable_messages = true;
+        }
+
+        if (img_en && no_consumable_messages == false) {
+          // Are all images
+          bool all_image_consumed = true;
         for (auto &cs : camera_states)
         {
-          if (cs->has_image_extraction_finished == false) {
-            while (cs->n_consumed_images != cs->n_extracted_images)
-            {
-              // Empty the queue
-              if (cs->empty() == false)
+            if (cs->is_finished() == false)
               {
-                cs->pop();
+              all_image_consumed = false;
+              break;
               }
             }
-            all_image_extracted = false;
+          no_consumable_messages = all_image_consumed;
           }
-        }
-        if (all_image_extracted)
+
+        if (no_consumable_messages)
         {
           finished = true;
           break;
@@ -1283,7 +1292,6 @@ void LIVMapper::bag_lidar_imu_reader(void) {
     view.addQuery(i, rosbag::TopicQuery(imu_topic));
   }
 
-  has_lidar_and_imu_extraction_finished = false;
   for (const auto &i : view) {
     if (!ros::ok()) {
       break;
@@ -1311,7 +1319,7 @@ void LIVMapper::bag_lidar_imu_reader(void) {
     return;
   }
 
-  has_lidar_and_imu_extraction_finished = true;
+  is_lidar_and_imu_extraction_finished = true;
   ROS_INFO("LiDAR and IMU topics iteration completed");
 }
 

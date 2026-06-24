@@ -174,6 +174,8 @@ struct CameraState
 
   bool is_paused();
 
+  bool is_finished();
+
   ImageTime get_first_img_time();
 };
 #endif
