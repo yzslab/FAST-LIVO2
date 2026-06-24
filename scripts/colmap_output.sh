@@ -7,6 +7,7 @@ if [[ -z "$BASE_DIR" || "$BASE_DIR" =~ ^[[:space:]]+$ ]]; then
 fi
 
 TARGET_DIRS=(
+    "${BASE_DIR}/PCD"
     "${BASE_DIR}/PCD_frames"
     "${BASE_DIR}/Colmap/images"
     "${BASE_DIR}/Colmap/sparse/0"

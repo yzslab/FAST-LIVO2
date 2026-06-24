@@ -12,20 +12,64 @@ which is included as part of this source code package.
 
 #include "LIVMapper.h"
 #include <vikit/camera_loader.h>
+#include <filesystem>
+#include <chrono>
+#include <ctime>
+#include <sstream>
+#include <iomanip>
+#include <poll.h>
+#include <unistd.h>
 
 LIVMapper::LIVMapper(ros::NodeHandle &nh)
     : extT(0, 0, 0),
       extR(M3D::Identity())
 {
+  finished = false;
+
   extrinT.assign(3, 0.0);
   extrinR.assign(9, 0.0);
   // cameraextrinT.assign(3, 0.0);
   // cameraextrinR.assign(9, 0.0);
-
-  p_pre.reset(new Preprocess());
-  p_imu.reset(new ImuProcess());
-
+  
+  p_pre.reset(new Preprocess()); // Must be placed before readParameters()
   readParameters(nh);
+  scan_bag_files();
+
+  if (basic_output_dir == "")
+  {
+    basic_output_dir = std::string(ROOT_DIR) + "Log/";
+    if (is_bag_file_mode())
+    {
+      auto first_bag_abs_path = std::filesystem::absolute(std::filesystem::path(bag_files[0]));
+
+      auto output_path = first_bag_abs_path.parent_path() / "LIVO-outputs";
+
+      // Append a timestamp if the target output dir already exists
+      if (std::filesystem::exists(output_path))
+      {
+        auto now = std::time(nullptr);
+
+        std::stringstream ss;
+        ss << std::put_time(std::localtime(&now), "%Y%m%d_%H%M%S");
+
+        output_path += "-" + ss.str();
+      }
+
+      basic_output_dir = output_path.string() + "/";
+    }
+  }
+  else
+  {
+    if (basic_output_dir[0] == '~')
+    {
+      basic_output_dir = getenv("HOME") + basic_output_dir.substr(1);
+    }
+
+    basic_output_dir = basic_output_dir + "/";
+  }
+  std::cout << "output_dir=" << basic_output_dir << std::endl;
+
+  p_imu.reset(new ImuProcess(basic_output_dir));
 
   find_valid_cameras(nh);
 
@@ -130,9 +174,57 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
   nh.param<bool>("publish/pub_effect_point_en", pub_effect_point_en, false);
   nh.param<bool>("publish/dense_map_en", dense_map_en, false);
 
+  nh.param<std::string>("output_dir", basic_output_dir, "");
   nh.param<std::string>("bag", bag_file_paths, "");
 
   p_pre->blind_sqr = p_pre->blind * p_pre->blind;
+}
+
+void LIVMapper::scan_bag_files()
+{
+  std::cout << "bag_file_paths=" << bag_file_paths << std::endl;
+  std::string not_parsed = bag_file_paths;
+  while (not_parsed.length() > 0) {
+    auto index = not_parsed.find(',');
+    auto pattern = not_parsed.substr(0, index);
+
+    if (index == std::string::npos) {
+      index = not_parsed.length() - 1;
+    }
+    not_parsed = not_parsed.substr(index + 1);
+
+    if (pattern.length() == 0) {
+      continue;
+    }
+
+    if (pattern[0] == '~') {
+      pattern = getenv("HOME") + pattern.substr(1);
+    }
+
+    glob_t globbuf;
+    int glob_ret = glob(pattern.c_str(), 0, NULL, &globbuf);
+    if (glob_ret < 0) {
+      perror("glob()");
+      exit(1);
+    }
+
+    for (int i = 0; i < globbuf.gl_pathc; ++i) {
+      bag_files.emplace_back(globbuf.gl_pathv[i]);
+    }
+
+    globfree(&globbuf);
+  }
+
+  if (bag_file_paths.length() > 0) {
+    if (bag_files.size() == 0) {
+      ROS_ERROR("Bag file paths provided, but not a valid one can be found");
+      exit(1);
+    }
+    std::cout << "Bag files:" << std::endl;
+    for (auto &i : bag_files) {
+      std::cout << "  " << i << std::endl;
+    }
+  }
 }
 
 void LIVMapper::initializeColmapOutputs()
@@ -141,9 +233,11 @@ void LIVMapper::initializeColmapOutputs()
     fout_colmap << "# Image list with two lines of data per image:\n";
     fout_colmap << "#   IMAGE_ID, QW, QX, QY, QZ, TX, TY, TZ, CAMERA_ID, NAME\n";
     fout_colmap << "#   POINTS2D[] as (X, Y, POINT3D_ID)\n";
+    fout_colmap.flush();
     fout_camera.open(DEBUG_FILE_DIR("Colmap/sparse/0/cameras.txt"), ios::out);
     fout_camera << "# Camera list with one line of data per camera:\n";
     fout_camera << "#   CAMERA_ID, MODEL, WIDTH, HEIGHT, PARAMS[]\n";
+    fout_camera.flush();
 }
 
 void LIVMapper::initializeComponents() 
@@ -155,7 +249,10 @@ void LIVMapper::initializeComponents()
   voxelmap_manager->extT_ << VEC_FROM_ARRAY(extrinT);
   voxelmap_manager->extR_ << MAT_FROM_ARRAY(extrinR);
 
-  initializeColmapOutputs();
+  if (colmap_output_en)
+  {
+    initializeColmapOutputs();
+  }
 
   for (auto &cs : camera_states)
   {
@@ -163,7 +260,8 @@ void LIVMapper::initializeComponents()
       cs->id, 
       fout_colmap,
       fout_camera,
-      vio_feat_map
+      vio_feat_map,
+      basic_output_dir
     );
     vio_managers.push_back(vio_manager);
   
@@ -233,7 +331,6 @@ void LIVMapper::initializeComponents()
     vio_manager->colmap_output_en = colmap_output_en;
     vio_manager->initializeVIO();
   }
-  fout_camera.flush();
 
   p_imu->set_extrinsic(extT, extR);
   p_imu->set_gyr_cov_scale(V3D(gyr_cov, gyr_cov, gyr_cov));
@@ -249,50 +346,6 @@ void LIVMapper::initializeComponents()
   if (!exposure_estimate_en) p_imu->disable_exposure_est();
 
   slam_mode_ = (img_en && lidar_en) ? LIVO : imu_en ? ONLY_LIO : ONLY_LO;
-
-  std::cout << "bag_file_paths=" << bag_file_paths << std::endl;
-  std::string not_parsed = bag_file_paths;
-  while (not_parsed.length() > 0) {
-    auto index = not_parsed.find(',');
-    auto pattern = not_parsed.substr(0, index);
-
-    if (index == std::string::npos) {
-      index = not_parsed.length() - 1;
-    }
-    not_parsed = not_parsed.substr(index + 1);
-
-    if (pattern.length() == 0) {
-      continue;
-    }
-
-    if (pattern[0] == '~') {
-      pattern = getenv("HOME") + pattern.substr(1);
-    }
-
-    glob_t globbuf;
-    int glob_ret = glob(pattern.c_str(), 0, NULL, &globbuf);
-    if (glob_ret < 0) {
-      perror("glob()");
-      exit(1);
-    }
-
-    for (int i = 0; i < globbuf.gl_pathc; ++i) {
-      bag_files.emplace_back(globbuf.gl_pathv[i]);
-    }
-
-    globfree(&globbuf);
-  }
-
-  if (bag_file_paths.length() > 0) {
-    if (bag_files.size() == 0) {
-      ROS_ERROR("Bag file paths provided, but not a valid one can be found");
-      exit(1);
-    }
-    std::cout << "Bag files:" << std::endl;
-    for (auto &i : bag_files) {
-      std::cout << "  " << i << std::endl;
-    }
-  }
 }
 
 void LIVMapper::initializeFiles() 
@@ -305,25 +358,27 @@ void LIVMapper::initializeFiles()
       
       int chmodRet = system(chmodCommand.c_str());  
       if (chmodRet != 0) {
-          std::cerr << "Failed to set execute permissions for the script." << std::endl;
-          return;
+          std::cerr << "Failed to set execute permissions for the script: " << folderPath << "." << std::endl;
+          exit(1);
       }
 
-      int executionRet = system(folderPath.c_str());
+      auto command = folderPath + " '" + basic_output_dir + "'";
+
+      int executionRet = system(command.c_str());
       if (executionRet != 0) {
-          std::cerr << "Failed to execute the script." << std::endl;
-          return;
+          std::cerr << "Failed to execute the script: " << folderPath << "." << std::endl;
+          exit(1);
       }
   }
 
   if(colmap_output_en)
   {
-    colmap_output_dir = std::string(ROOT_DIR) + "Log/Colmap/sparse/0/";
+    colmap_output_dir = basic_output_dir + "/Colmap/sparse/0/";
     fout_points.open(colmap_output_dir + "points3D.txt", std::ios::out);
   }
   if (pcd_save_en)
   {
-    pcd_output_dir = string(ROOT_DIR) + "Log/PCD_frames/";
+    pcd_output_dir = basic_output_dir + "/PCD_frames/";
     fout_pcd_pos.open(pcd_output_dir + "scans_pos.txt", std::ios::out);
   }
   fout_pre.open(DEBUG_FILE_DIR("mat_pre.txt"), std::ios::out);
@@ -623,13 +678,13 @@ void LIVMapper::handleLIO()
     std::ofstream outFile, evoFile;
     if (!pos_opend) 
     {
-      evoFile.open(std::string(ROOT_DIR) + "Log/result/" + seq_name + ".txt", std::ios::out);
+      evoFile.open(basic_output_dir + "result/" + seq_name + ".txt", std::ios::out);
       pos_opend = true;
       if (!evoFile.is_open()) ROS_ERROR("open fail\n");
     } 
     else 
     {
-      evoFile.open(std::string(ROOT_DIR) + "Log/result/" + seq_name + ".txt", std::ios::app);
+      evoFile.open(basic_output_dir + "result/" + seq_name + ".txt", std::ios::app);
       if (!evoFile.is_open()) ROS_ERROR("open fail\n");
     }
     Eigen::Matrix4d outT;
@@ -740,8 +795,8 @@ void LIVMapper::savePCD()
 {
   if (pcd_save_en && (pcl_wait_save->points.size() > 0 || pcl_wait_save_intensity->points.size() > 0) && pcd_save_interval < 0) 
   {
-    std::string raw_points_dir = std::string(ROOT_DIR) + "Log/PCD/all_raw_points.pcd";
-    std::string downsampled_points_dir = std::string(ROOT_DIR) + "Log/PCD/all_downsampled_points.pcd";
+    std::string raw_points_dir = basic_output_dir + "PCD/all_raw_points.pcd";
+    std::string downsampled_points_dir = basic_output_dir + "PCD/all_downsampled_points.pcd";
     pcl::PCDWriter pcd_writer;
 
     if (img_en)
@@ -791,10 +846,27 @@ void *wait_key_thread(void *arg) {
 
   char ch;
 
-  for (;;) {
+  for (;ros::ok();) {
+    struct pollfd pfd;
+    pfd.fd = STDIN_FILENO;
+    pfd.events = POLLIN;
+
+    int ret = poll(&pfd, 1, 100);  // 100ms timeout
+
+    if (mapper->finished)
+    {
+      break;
+    }
+
+    if (ret <= 0)
+    {
+      continue;
+    }
+
     while ((ch = getchar()) != '\n') {
       if (ch == EOF) {
         mapper->is_paused = false;
+        ROS_INFO("key waiting existed");
         return NULL;
       }
       continue;
@@ -803,6 +875,8 @@ void *wait_key_thread(void *arg) {
     mapper->is_paused = !mapper->is_paused;
   }
 
+  ROS_INFO("key waiting existed");
+
   return NULL;
 }
 
@@ -810,25 +884,45 @@ void LIVMapper::run()
 {
   is_paused = false;
 
+  pthread_t wait_key_thread_id;
   if (bag_files.size() > 0) {
-    pthread_t wait_key_thread_id;
     if (pthread_create(&wait_key_thread_id, NULL, wait_key_thread, static_cast<void *>(this)) != 0) {
       perror("pthread_create()");
-    } else {
-      pthread_detach(wait_key_thread_id);
     }
   }
 
   ros::Rate rate(5000);
   while (ros::ok()) 
   {
-    while (is_paused) {
+    while (ros::ok() && is_paused) {
       usleep(10000);
     }
 
     ros::spinOnce();
     if (!sync_packages(LidarMeasures)) 
     {
+      if (is_bag_file_mode() && has_lidar_and_imu_extraction_finished) {
+        bool all_image_extracted = true;
+        for (auto &cs : camera_states)
+        {
+          if (cs->has_image_extraction_finished == false) {
+            while (cs->n_consumed_images != cs->n_extracted_images)
+            {
+              // Empty the queue
+              if (cs->empty() == false)
+              {
+                cs->pop();
+              }
+            }
+            all_image_extracted = false;
+          }
+        }
+        if (all_image_extracted)
+        {
+          finished = true;
+          break;
+        }
+      }
       rate.sleep();
       continue;
     }
@@ -841,8 +935,11 @@ void LIVMapper::run()
     stateEstimationAndMapping();
   }
   // stop the wait key thread
-  close(STDIN_FILENO);
+  if (bag_files.size() > 0) {
+    pthread_join(wait_key_thread_id, NULL);
+  }
   savePCD();
+  ROS_INFO("Finished.");
 }
 
 void LIVMapper::prop_imu_once(StatesGroup &imu_prop_state, const double dt, V3D acc_avr, V3D angvel_avr)
@@ -992,9 +1089,9 @@ void LIVMapper::standard_pcl_cbk(const sensor_msgs::PointCloud2::ConstPtr &msg)
   {
     ROS_ERROR("lidar loop back, clear buffer");
     lid_raw_data_buffer.clear();
-    if (is_bag_file_mode() > 0) {
-      is_paused = true;
-    }
+    // if (is_bag_file_mode() > 0) {
+      // is_paused = true;
+    // }
   }
   // ROS_INFO("get point cloud at time: %.6f", msg->header.stamp.toSec());
   PointCloudXYZI::Ptr ptr(new PointCloudXYZI());
@@ -1075,9 +1172,9 @@ void LIVMapper::imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
     mtx_buffer.unlock();
     sig_buffer.notify_all();
     ROS_ERROR("imu loop back at %lu, offset: %lf \n", msg->header.stamp.toNSec(), last_timestamp_imu - timestamp);
-    if (is_bag_file_mode()) {
-      is_paused = true;
-    }
+    // if (is_bag_file_mode()) {
+      // is_paused = true;
+    // }
     return;
   }
 
@@ -1186,6 +1283,7 @@ void LIVMapper::bag_lidar_imu_reader(void) {
     view.addQuery(i, rosbag::TopicQuery(imu_topic));
   }
 
+  has_lidar_and_imu_extraction_finished = false;
   for (const auto &i : view) {
     if (!ros::ok()) {
       break;
@@ -1213,6 +1311,7 @@ void LIVMapper::bag_lidar_imu_reader(void) {
     return;
   }
 
+  has_lidar_and_imu_extraction_finished = true;
   ROS_INFO("LiDAR and IMU topics iteration completed");
 }
 
